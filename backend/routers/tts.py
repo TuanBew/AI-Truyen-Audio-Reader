@@ -6,12 +6,13 @@ Returns audio bytes with provider info in headers.
 import base64
 import io
 import logging
+import re as _re
 from enum import Enum
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse, JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
@@ -21,6 +22,56 @@ from google.cloud import texttospeech as gctts
 router = APIRouter()
 limiter = Limiter(key_func=get_remote_address)
 logger = logging.getLogger(__name__)
+
+_ABBREV_RE = _re.compile(
+    r'\b(Mr|Mrs|Ms|Dr|Prof|St|Jr|Sr|vs|etc|No|Vol|pp|e\.g|i\.e)\.',
+    _re.IGNORECASE
+)
+# Numbered list prefixes require a trailing space so "3.14" is NOT protected
+_NUMBERED_LIST_RE = _re.compile(r'(?<!\d)\b\d+\.\s')
+
+
+def _split_into_sentences(text: str) -> list[str]:
+    """Vietnamese-aware sentence splitter. Max 300 chars per sentence."""
+    text = text.replace('...', '\x00EL\x00')
+
+    def _protect(m: _re.Match) -> str:
+        return m.group(0).replace('.', '\x00DOT\x00')
+
+    text = _ABBREV_RE.sub(_protect, text)
+    text = _NUMBERED_LIST_RE.sub(_protect, text)
+
+    parts = _re.split(r'(?<=[.!?…])\s+', text.strip())
+    parts = [
+        p.replace('\x00EL\x00', '...').replace('\x00DOT\x00', '.')
+        for p in parts if p.strip()
+    ]
+
+    # Enforce 300-char max by splitting at last word boundary
+    result: list[str] = []
+    for part in parts:
+        while len(part) > 300:
+            split_pos = part.rfind(' ', 0, 300)
+            if split_pos == -1:
+                split_pos = 300
+            result.append(part[:split_pos].strip())
+            part = part[split_pos:].strip()
+        if part:
+            result.append(part)
+
+    # Merge sentences shorter than 5 chars with the next one
+    merged: list[str] = []
+    i = 0
+    while i < len(result):
+        s = result[i]
+        if len(s.strip()) < 5 and i + 1 < len(result):
+            merged.append(s.strip() + ' ' + result[i + 1].strip())
+            i += 2
+        else:
+            merged.append(s)
+            i += 1
+
+    return [s for s in merged if s.strip()]
 
 
 class TTSProvider(str, Enum):
@@ -52,6 +103,17 @@ class TTSResult(BaseModel):
     fallback_used: bool
     fallback_reason: Optional[str]
     audio_format: str
+
+
+class SplitRequest(BaseModel):
+    text: str
+
+    @field_validator("text")
+    @classmethod
+    def text_max_length(cls, v: str) -> str:
+        if len(v) > 5000:
+            raise ValueError("Text exceeds 5000 character limit")
+        return v
 
 
 def _encoding_from_format(fmt: str) -> "gctts.AudioEncoding":
@@ -231,3 +293,11 @@ async def synthesize_with_timing(request: Request, body: TTSRequest):
 async def list_gemini_voices(language_code: str = "vi-VN"):
     """List available Gemini/Google TTS voices."""
     return tts_gemini.list_voices(language_code=language_code)
+
+
+@router.post("/split-sentences")
+@limiter.limit("120/minute")
+async def split_sentences(request: Request, body: SplitRequest):
+    """Split chapter text into Vietnamese sentences for sentence-by-sentence TTS."""
+    sentences = _split_into_sentences(body.text)
+    return {"sentences": sentences, "count": len(sentences)}
