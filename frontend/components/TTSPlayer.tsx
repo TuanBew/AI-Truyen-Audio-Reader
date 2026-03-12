@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { toast } from "react-toastify";
 import { useAppStore } from "@/lib/store";
+import { supabase } from "@/lib/supabase";
 import type { TTSProvider, WordTiming } from "@/lib/types";
 
 const PROVIDER_LABELS: Record<TTSProvider, string> = {
@@ -66,6 +67,7 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
   const [audioBlobUrl, setAudioBlobUrl] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
   const markedFinishedRef = useRef(false);
+  const [resumeFromIndex, setResumeFromIndex] = useState(0);
 
   // Reset finished marker when chapter changes
   useEffect(() => {
@@ -94,6 +96,21 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
         if (!res.ok) throw new Error(`Split failed: ${res.status}`);
         const data = await res.json();
         setSentences(data.sentences); // revokes previous blobs automatically
+
+        // Check for saved progress to offer resume toast
+        const userId = useAppStore.getState().authState.supabaseUserId
+        if (userId && currentChapter?.source_url) {
+          const { data: progress } = await supabase
+            .from('reading_progress')
+            .select('sentence_index')
+            .eq('user_id', userId)
+            .eq('chapter_url', currentChapter.source_url)
+            .single()
+
+          if (progress && progress.sentence_index > 0) {
+            setResumeFromIndex(progress.sentence_index)
+          }
+        }
       } catch (err) {
         console.error("Failed to split chapter into sentences:", err);
       }
@@ -425,7 +442,25 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
   const { providerUsed, fallbackUsed, isLoading } = playerState;
 
   return (
-    <div className="px-4 py-3 flex flex-col gap-2">
+    <div className="relative px-4 py-3 flex flex-col gap-2">
+      {/* Resume toast */}
+      {resumeFromIndex > 0 && (
+        <div className="absolute bottom-full left-0 right-0 mb-2 mx-4 flex items-center justify-between rounded-xl bg-violet-900/80 px-4 py-2 text-sm text-white backdrop-blur">
+          <span>Tiếp tục từ câu {resumeFromIndex + 1}?</span>
+          <div className="flex gap-2">
+            <button
+              onClick={() => { seekToSentence(resumeFromIndex); setResumeFromIndex(0) }}
+              className="rounded-lg bg-violet-600 px-3 py-1 text-xs font-medium hover:bg-violet-500"
+            >
+              Tiếp tục
+            </button>
+            <button onClick={() => setResumeFromIndex(0)} className="text-xs text-gray-400 hover:text-white">
+              Bỏ qua
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Audio element (hidden) */}
       <audio
         ref={audioRef}
