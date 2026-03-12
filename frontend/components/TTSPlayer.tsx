@@ -47,6 +47,21 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
     isChapterFinished,
   } = useAppStore();
 
+  // Sentence queue state and actions
+  const currentChapter = useAppStore((s) => s.currentChapter);
+  const setSentences = useAppStore((s) => s.setSentences);
+  const { sentences, currentSentenceIndex } = useAppStore(
+    (s) => s.sentenceQueue
+  );
+  const cacheSentenceAudio = useAppStore((s) => s.cacheSentenceAudio);
+  const evictSentenceAudio = useAppStore((s) => s.evictSentenceAudio);
+  const registerAbortController = useAppStore((s) => s.registerAbortController);
+  const abortAllPrefetches = useAppStore((s) => s.abortAllPrefetches);
+  const setCurrentSentenceIndex = useAppStore((s) => s.setCurrentSentenceIndex);
+  const setCurrentSentenceWordTimings = useAppStore((s) => s.setCurrentSentenceWordTimings);
+
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [audioBlobUrl, setAudioBlobUrl] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
@@ -64,6 +79,134 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
       if (audioBlobUrl) URL.revokeObjectURL(audioBlobUrl);
     };
   }, [audioBlobUrl]);
+
+  // Split chapter into sentences when the loaded chapter changes
+  useEffect(() => {
+    if (!currentChapter?.content) return;
+
+    const fetchSentences = async () => {
+      try {
+        const res = await fetch(`${apiUrl}/api/tts/split-sentences`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: currentChapter.content }),
+        });
+        if (!res.ok) throw new Error(`Split failed: ${res.status}`);
+        const data = await res.json();
+        setSentences(data.sentences); // revokes previous blobs automatically
+      } catch (err) {
+        console.error("Failed to split chapter into sentences:", err);
+      }
+    };
+
+    fetchSentences();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentChapter?.source_url]);
+
+  // Cleanup on unmount: revoke all cached blob URLs and clear the store
+  useEffect(() => {
+    return () => {
+      const cache = useAppStore.getState().sentenceQueue.sentenceAudioCache;
+      Object.values(cache).forEach((url) => URL.revokeObjectURL(url));
+      useAppStore.getState().abortAllPrefetches();
+      useAppStore.getState().setSentences([]);
+    };
+  }, []);
+
+  const synthesizeSentence = useCallback(
+    async (index: number): Promise<string | null> => {
+      const state = useAppStore.getState().sentenceQueue;
+      if (state.sentenceAudioCache[index]) return state.sentenceAudioCache[index];
+
+      const controller = new AbortController();
+      registerAbortController(index, controller);
+
+      try {
+        const res = await fetch(`${apiUrl}/api/tts/synthesize-with-timing`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(ttsSettings.openaiApiKey
+              ? { "X-OpenAI-Key": ttsSettings.openaiApiKey }
+              : {}),
+            ...(ttsSettings.minimaxApiKey
+              ? { "X-MiniMax-Key": ttsSettings.minimaxApiKey }
+              : {}),
+            ...(ttsSettings.minimaxGroupId
+              ? { "X-MiniMax-Group-Id": ttsSettings.minimaxGroupId }
+              : {}),
+          },
+          body: JSON.stringify({
+            text: useAppStore.getState().sentenceQueue.sentences[index],
+            preferred_provider: ttsSettings.preferredProvider,
+            audio_format: ttsSettings.audioFormat,
+            gemini_voice: ttsSettings.geminiVoice,
+            gemini_language: ttsSettings.geminiLanguage,
+            openai_voice: ttsSettings.openaiVoice,
+            openai_model: ttsSettings.openaiModel,
+            minimax_voice_id: ttsSettings.minimaxVoiceId,
+            speed: ttsSettings.speed,
+            pitch: ttsSettings.pitch,
+          }),
+          signal: controller.signal,
+        });
+        if (!res.ok) throw new Error(`TTS failed: ${res.status}`);
+        const data = await res.json();
+
+        // data.audio_b64, data.word_timings (matching existing synthesize response shape)
+        const audioB64 = data.audio_b64 ?? data.audio_base64;
+        const audioBytes = Uint8Array.from(atob(audioB64), (c) => c.charCodeAt(0));
+        const mimeType = ttsSettings.audioFormat === "wav" ? "audio/wav" : "audio/mpeg";
+        const blob = new Blob([audioBytes], { type: mimeType });
+        const blobUrl = URL.createObjectURL(blob);
+        cacheSentenceAudio(index, blobUrl);
+
+        if (data.word_timings) {
+          setCurrentSentenceWordTimings(data.word_timings);
+        }
+        return blobUrl;
+      } catch (err: unknown) {
+        if (err instanceof DOMException && err.name === "AbortError") {
+          return null; // Seek cancelled this prefetch — silently discard
+        }
+        console.error(`Sentence ${index} synthesis failed:`, err);
+        return null;
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [apiUrl, ttsSettings, registerAbortController, cacheSentenceAudio, setCurrentSentenceWordTimings]
+  );
+
+  const playSentence = useCallback(
+    async (index: number) => {
+      const url = await synthesizeSentence(index);
+      if (!url || !audioRef.current) return;
+
+      audioRef.current.src = url;
+      audioRef.current.play().catch(() => {});
+      setCurrentSentenceIndex(index);
+
+      // Prefetch the next sentence (1-sentence lookahead)
+      const next = index + 1;
+      const totalSentences = useAppStore.getState().sentenceQueue.sentences.length;
+      if (next < totalSentences) {
+        synthesizeSentence(next); // fire-and-forget; AbortController handles cancellation
+      }
+
+      // Evict sentence from 2 before current (retain current-1, current, current+1)
+      const toEvict = index - 2;
+      if (toEvict >= 0) evictSentenceAudio(toEvict);
+    },
+    [synthesizeSentence, setCurrentSentenceIndex, evictSentenceAudio]
+  );
+
+  const seekToSentence = useCallback(
+    async (index: number) => {
+      abortAllPrefetches(); // cancel all in-flight fetches immediately
+      await playSentence(index);
+    },
+    [abortAllPrefetches, playSentence]
+  );
 
   const synthesize = useCallback(async () => {
     setPlayerLoading(true);
@@ -221,7 +364,33 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
     }
   };
 
-  const handleEnded = () => {
+  const handleSentenceEnded = useCallback(() => {
+    const { sentences: currentSentences, currentSentenceIndex: curIdx } =
+      useAppStore.getState().sentenceQueue;
+    const nextIndex = curIdx + 1;
+    const isLastSentence = curIdx >= currentSentences.length - 1;
+
+    if (isLastSentence) {
+      // Chapter complete — fall through to handleEnded logic
+      return;
+    }
+
+    playSentence(nextIndex);
+  }, [playSentence]);
+
+  const handleEnded = useCallback(() => {
+    // If we're in sentence mode and there's a next sentence, let handleSentenceEnded manage it
+    const { sentences: currentSentences, currentSentenceIndex: curIdx } =
+      useAppStore.getState().sentenceQueue;
+    const isInSentenceMode = currentSentences.length > 0 && curIdx >= 0;
+    const isLastSentence = curIdx >= currentSentences.length - 1;
+
+    if (isInSentenceMode && !isLastSentence) {
+      handleSentenceEnded();
+      return;
+    }
+
+    // Original handleEnded logic
     setPlaying(false);
     setProgress(0);
     // Mark all words highlighted on complete playback
@@ -235,7 +404,15 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
     }
     // Auto-advance fires here — only when audio truly ends
     onEnded?.();
-  };
+  }, [
+    handleSentenceEnded,
+    setPlaying,
+    wordTimings,
+    setHighlightedWordIndex,
+    markChapterFinished,
+    chapterUrl,
+    onEnded,
+  ]);
 
   const seekTo = (e: React.MouseEvent<HTMLDivElement>) => {
     const el = audioRef.current;
@@ -311,6 +488,13 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
             style={{ width: `${progress}%` }}
           />
         </div>
+
+        {/* Sentence counter */}
+        {sentences.length > 0 && (
+          <span className="text-xs text-gray-500">
+            S.{Math.max(1, currentSentenceIndex + 1)}/{sentences.length}
+          </span>
+        )}
 
         {/* Auto-advance toggle */}
         <label className="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer select-none">
