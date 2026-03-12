@@ -90,6 +90,17 @@ export interface SavedNovel {
 
 export type AppView = "home" | "reader";
 
+// ─── Sentence Queue ───────────────────────────────────────────
+export interface SentenceQueueState {
+  sentences: string[]
+  currentSentenceIndex: number
+  sentenceAudioCache: Record<number, string>    // blob URLs — NOT persisted
+  prefetchingSentenceIndex: number
+  // In store (not component state) so seek logic can cancel from anywhere
+  sentenceAbortControllers: Record<number, AbortController>
+  currentSentenceWordTimings: WordTiming[]
+}
+
 // ─── Auth ────────────────────────────────────────────────────
 export type SyncStatus = 'idle' | 'syncing' | 'synced' | 'offline'
 
@@ -130,4 +141,7 @@ export interface AppState {
 
   // UI
   settingsPanelOpen: boolean;
+
+  // Sentence queue (transient)
+  sentenceQueue: SentenceQueueState;
 }

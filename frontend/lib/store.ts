@@ -11,6 +11,7 @@ import type {
   SavedNovel,
   WordTiming,
   AuthState,
+  SentenceQueueState,
 } from "./types";
 
 const defaultTTSSettings: TTSSettings = {
@@ -86,6 +87,15 @@ interface AppStore extends AppState {
   // Auth (transient — not persisted)
   authState: AuthState;
   setAuthState: (auth: Partial<AuthState>) => void;
+
+  // Sentence queue
+  setSentences: (sentences: string[]) => void;
+  setCurrentSentenceIndex: (index: number) => void;
+  cacheSentenceAudio: (index: number, blobUrl: string) => void;
+  evictSentenceAudio: (index: number) => void;
+  registerAbortController: (index: number, controller: AbortController) => void;
+  abortAllPrefetches: () => void;
+  setCurrentSentenceWordTimings: (timings: WordTiming[]) => void;
 }
 
 export const useAppStore = create<AppStore>()(
@@ -128,6 +138,14 @@ export const useAppStore = create<AppStore>()(
         supabaseEmail: null,
         syncStatus: 'idle',
       },
+      sentenceQueue: {
+        sentences: [],
+        currentSentenceIndex: -1,
+        sentenceAudioCache: {},
+        prefetchingSentenceIndex: -1,
+        sentenceAbortControllers: {},
+        currentSentenceWordTimings: [],
+      } as SentenceQueueState,
 
       // ── View ──────────────────────────────────────────────
       setView: (view, novelId = null) =>
@@ -253,6 +271,81 @@ export const useAppStore = create<AppStore>()(
       setAuthState: (auth) =>
         set((state) => ({
           authState: { ...state.authState, ...auth },
+        })),
+
+      // ── Sentence queue ────────────────────────────────────
+      setSentences: (sentences: string[]) =>
+        set((state) => {
+          // Revoke all blob URLs from previous chapter before replacing
+          Object.values(state.sentenceQueue.sentenceAudioCache).forEach(
+            (url) => URL.revokeObjectURL(url)
+          )
+          // Abort all in-flight prefetch requests
+          Object.values(state.sentenceQueue.sentenceAbortControllers).forEach(
+            (c) => c.abort()
+          )
+          return {
+            sentenceQueue: {
+              sentences,
+              currentSentenceIndex: -1,
+              sentenceAudioCache: {},
+              prefetchingSentenceIndex: -1,
+              sentenceAbortControllers: {},
+              currentSentenceWordTimings: [],
+            },
+          }
+        }),
+
+      setCurrentSentenceIndex: (index: number) =>
+        set((state) => ({
+          sentenceQueue: { ...state.sentenceQueue, currentSentenceIndex: index },
+        })),
+
+      cacheSentenceAudio: (index: number, blobUrl: string) =>
+        set((state) => ({
+          sentenceQueue: {
+            ...state.sentenceQueue,
+            sentenceAudioCache: { ...state.sentenceQueue.sentenceAudioCache, [index]: blobUrl },
+          },
+        })),
+
+      evictSentenceAudio: (index: number) =>
+        set((state) => {
+          const cache = { ...state.sentenceQueue.sentenceAudioCache }
+          if (cache[index]) {
+            URL.revokeObjectURL(cache[index])  // release Blob from browser memory
+            delete cache[index]
+          }
+          return { sentenceQueue: { ...state.sentenceQueue, sentenceAudioCache: cache } }
+        }),
+
+      registerAbortController: (index: number, controller: AbortController) =>
+        set((state) => ({
+          sentenceQueue: {
+            ...state.sentenceQueue,
+            sentenceAbortControllers: {
+              ...state.sentenceQueue.sentenceAbortControllers,
+              [index]: controller,
+            },
+            prefetchingSentenceIndex: index,
+          },
+        })),
+
+      abortAllPrefetches: () =>
+        set((state) => {
+          Object.values(state.sentenceQueue.sentenceAbortControllers).forEach((c) => c.abort())
+          return {
+            sentenceQueue: {
+              ...state.sentenceQueue,
+              sentenceAbortControllers: {},
+              prefetchingSentenceIndex: -1,
+            },
+          }
+        }),
+
+      setCurrentSentenceWordTimings: (timings: WordTiming[]) =>
+        set((state) => ({
+          sentenceQueue: { ...state.sentenceQueue, currentSentenceWordTimings: timings },
         })),
     }),
     {
