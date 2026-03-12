@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import {
   Play, Pause, Square, Volume2, AlertTriangle, Loader2, RefreshCw
 } from "lucide-react";
+import AudioVisualizer from "./AudioVisualizer";
 import { toast } from "react-toastify";
 import { useAppStore } from "@/lib/store";
 import { supabase } from "@/lib/supabase";
@@ -542,6 +543,9 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
           Tự chuyển
         </label>
       </div>
+
+      {/* Audio visualizer */}
+      <AudioVisualizer audioElement={audioRef.current} isPlaying={playerState.isPlaying} />
 
       {/* Provider badge */}
       {providerUsed && (
