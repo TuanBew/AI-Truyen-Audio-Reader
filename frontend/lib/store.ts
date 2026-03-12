@@ -10,6 +10,7 @@ import type {
   TTSSettings,
   SavedNovel,
   WordTiming,
+  AuthState,
 } from "./types";
 
 const defaultTTSSettings: TTSSettings = {
@@ -81,6 +82,10 @@ interface AppStore extends AppState {
 
   // UI
   toggleSettingsPanel: () => void;
+
+  // Auth (transient — not persisted)
+  authState: AuthState;
+  setAuthState: (auth: Partial<AuthState>) => void;
 }
 
 export const useAppStore = create<AppStore>()(
@@ -118,6 +123,11 @@ export const useAppStore = create<AppStore>()(
         savedFiles: [],
       },
       settingsPanelOpen: false,
+      authState: {
+        supabaseUserId: null,
+        supabaseEmail: null,
+        syncStatus: 'idle',
+      },
 
       // ── View ──────────────────────────────────────────────
       setView: (view, novelId = null) =>
@@ -238,6 +248,12 @@ export const useAppStore = create<AppStore>()(
       // ── UI ───────────────────────────────────────────────
       toggleSettingsPanel: () =>
         set((s) => ({ settingsPanelOpen: !s.settingsPanelOpen })),
+
+      // ── Auth (transient) ─────────────────────────────────
+      setAuthState: (auth) =>
+        set((state) => ({
+          authState: { ...state.authState, ...auth },
+        })),
     }),
     {
       name: "audiotruyen-store",

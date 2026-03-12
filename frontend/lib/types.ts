@@ -90,6 +90,15 @@ export interface SavedNovel {
 
 export type AppView = "home" | "reader";
 
+// ─── Auth ────────────────────────────────────────────────────
+export type SyncStatus = 'idle' | 'syncing' | 'synced' | 'offline'
+
+export interface AuthState {
+  supabaseUserId: string | null
+  supabaseEmail: string | null
+  syncStatus: SyncStatus
+}
+
 export interface AppState {
   // View / navigation
   view: AppView;
