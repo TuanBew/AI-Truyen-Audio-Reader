@@ -2,7 +2,7 @@
 
 export type AudioFormat = "mp3" | "wav";
 
-export type TTSProvider = "gemini" | "openai" | "minimax" | "gtranslate";
+export type TTSProvider = "gemini" | "openai" | "minimax" | "xtts" | "gtranslate";
 
 export interface ChapterMeta {
   title: string;
@@ -41,6 +41,8 @@ export interface TTSSettings {
   // Common
   speed: number;
   pitch: number;
+  // XTTS
+  xttsEndpoint: string;  // default: "http://localhost:5002"
   // API keys (stored in localStorage, sent to backend in headers)
   openaiApiKey: string;
   minimaxApiKey: string;

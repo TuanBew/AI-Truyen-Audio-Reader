@@ -22,6 +22,7 @@ const defaultTTSSettings: TTSSettings = {
   openaiVoice: "nova",
   openaiModel: "tts-1",
   minimaxVoiceId: "male-qn-qingse",
+  xttsEndpoint: "http://localhost:5002",
   speed: 1.0,
   pitch: 0.0,
   openaiApiKey: "",

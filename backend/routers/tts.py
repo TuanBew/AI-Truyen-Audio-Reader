@@ -16,7 +16,10 @@ from pydantic import BaseModel, Field, field_validator
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
+import os
+
 from services import tts_gemini, tts_openai, tts_minimax, tts_gtranslate
+from services.tts_xtts import synthesize as xtts_synthesize, XTTSTTSError, XTTSQuotaError
 from google.cloud import texttospeech as gctts
 
 router = APIRouter()
@@ -78,6 +81,7 @@ class TTSProvider(str, Enum):
     gemini = "gemini"
     openai = "openai"
     minimax = "minimax"
+    xtts = "xtts"
     gtranslate = "gtranslate"
 
 
@@ -93,6 +97,8 @@ class TTSRequest(BaseModel):
     openai_model: str = "tts-1"
     # MiniMax options
     minimax_voice_id: str = "male-qn-qingse"
+    # XTTS options
+    xtts_endpoint: str | None = None
     # Common
     speed: float = Field(1.0, ge=0.5, le=2.0)
     pitch: float = Field(0.0, ge=-10.0, le=10.0)
@@ -145,6 +151,7 @@ def _run_provider_chain(
         TTSProvider.gemini,
         TTSProvider.openai,
         TTSProvider.minimax,
+        TTSProvider.xtts,
         TTSProvider.gtranslate,
     ]
     start_idx = all_providers.index(body.preferred_provider)
@@ -190,6 +197,10 @@ def _run_provider_chain(
                     audio_format=body.audio_format,
                 )
 
+            elif provider == TTSProvider.xtts:
+                xtts_endpoint = body.xtts_endpoint or os.getenv("XTTS_ENDPOINT", "http://localhost:5002")
+                audio_bytes = xtts_synthesize(text=body.text, endpoint=xtts_endpoint)
+
             elif provider == TTSProvider.gtranslate:
                 audio_bytes = tts_gtranslate.synthesize_long(
                     text=body.text,
@@ -206,6 +217,7 @@ def _run_provider_chain(
             tts_gemini.GeminiQuotaError,
             tts_openai.OpenAIQuotaError,
             tts_minimax.MiniMaxQuotaError,
+            XTTSQuotaError,
         ) as e:
             reason = f"{provider.value} quota exhausted: {e}"
             logger.warning(reason)
@@ -218,6 +230,7 @@ def _run_provider_chain(
             tts_openai.OpenAITTSError,
             tts_minimax.MiniMaxTTSError,
             tts_gtranslate.GTTranslateTTSError,
+            XTTSTTSError,
         ) as e:
             reason = f"{provider.value} error: {e}"
             logger.warning(reason)

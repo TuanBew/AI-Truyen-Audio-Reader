@@ -9,6 +9,7 @@ const PROVIDERS: { value: TTSProvider; label: string; description: string }[] = 
   { value: "gemini", label: "Google Gemini (ADC)", description: "Cần service account JSON" },
   { value: "openai", label: "OpenAI TTS", description: "Cần OPENAI_API_KEY" },
   { value: "minimax", label: "MiniMax", description: "Cần API key + Group ID" },
+  { value: "xtts", label: "Local XTTS (Vietnamese)", description: "thivux/XTTS-v2 · Cần Coqui TTS server" },
   { value: "gtranslate", label: "Google Translate (dự phòng)", description: "Không cần API key, chất lượng thấp" },
 ];
 
@@ -376,6 +377,23 @@ export default function SettingsPanel() {
                 ))}
               </select>
             </div>
+          </div>
+        </section>
+
+        {/* Local XTTS Server */}
+        <section>
+          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
+            Local XTTS Server
+          </h3>
+          <div>
+            <label className="text-xs text-gray-500 mb-1 block">Endpoint URL</label>
+            <input
+              type="url"
+              value={ttsSettings.xttsEndpoint}
+              onChange={sl("xttsEndpoint")}
+              placeholder="http://localhost:5002"
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-xs text-gray-300 placeholder-gray-600 focus:outline-none focus:border-indigo-500"
+            />
           </div>
         </section>
       </div>
