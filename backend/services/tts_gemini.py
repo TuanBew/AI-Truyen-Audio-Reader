@@ -24,17 +24,39 @@ class GeminiQuotaError(GeminiTTSError):
     pass
 
 
-def _get_client() -> texttospeech.TextToSpeechClient:
-    credentials_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-    if not credentials_path or not os.path.exists(credentials_path):
-        raise GeminiTTSError(
-            "GOOGLE_APPLICATION_CREDENTIALS not set or file not found. "
-            "Please configure your service account JSON path."
-        )
-    try:
-        return texttospeech.TextToSpeechClient()
-    except Exception as e:
-        raise GeminiTTSError(f"Failed to initialise Google TTS client: {e}")
+# Lazy singleton. reset_client() invalidates it; next get_client() re-creates.
+_client: "texttospeech.TextToSpeechClient | None" = None
+
+
+def get_client() -> "texttospeech.TextToSpeechClient":
+    """Return the cached TTS client, creating it on first call.
+
+    Raises:
+        GeminiTTSError: if GOOGLE_APPLICATION_CREDENTIALS is missing or invalid.
+    """
+    global _client
+    if _client is None:
+        credentials_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+        if not credentials_path or not os.path.exists(credentials_path):
+            raise GeminiTTSError(
+                "GOOGLE_APPLICATION_CREDENTIALS not set or file not found. "
+                "Upload your service account JSON via Settings → Google Cloud."
+            )
+        try:
+            _client = texttospeech.TextToSpeechClient()
+        except Exception as e:
+            raise GeminiTTSError(f"Failed to initialise Google TTS client: {e}")
+    return _client
+
+
+def reset_client() -> None:
+    """Invalidate the cached client. Call after saving new credentials.
+
+    The next call to get_client() will re-instantiate using the current
+    GOOGLE_APPLICATION_CREDENTIALS env var value.
+    """
+    global _client
+    _client = None
 
 
 def _text_to_ssml_with_marks(text: str) -> tuple[str, list[str]]:
@@ -68,7 +90,7 @@ def synthesize(
         GeminiQuotaError: API quota exhausted.
         GeminiTTSError: Other errors (bad creds, invalid params, etc.)
     """
-    client = _get_client()
+    client = get_client()
 
     synthesis_input = texttospeech.SynthesisInput(text=text)
     voice = texttospeech.VoiceSelectionParams(
@@ -117,7 +139,7 @@ def synthesize_with_timing(
         GeminiQuotaError: API quota exhausted.
         GeminiTTSError: Other errors.
     """
-    client = _get_client()
+    client = get_client()
 
     ssml_text, words = _text_to_ssml_with_marks(text)
 
@@ -181,7 +203,7 @@ def synthesize_with_timing(
 def list_voices(language_code: str = "vi-VN") -> list[dict]:
     """Return available voices for a language."""
     try:
-        client = texttospeech.TextToSpeechClient()
+        client = get_client()
         resp = client.list_voices(language_code=language_code)
         return [
             {
