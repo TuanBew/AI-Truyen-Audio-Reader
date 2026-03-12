@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Credentials — whole directory
+backend/credentials/
+
+# Credentials & secrets (other)
+audiotruyen-489912-4ca3ce87592a.json
+*.json.bak
+
+# Environment files — explicit paths
+backend/.env
+frontend/.env.local
+.env
+.env.local
+.env.*.local
+
+# Runtime state
+backend/.audio_state.json
+
+# Node / Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# VSCode
+.vscode/
+
+# Tool-generated / local tooling
+.claude/
+.playwright-mcp/
