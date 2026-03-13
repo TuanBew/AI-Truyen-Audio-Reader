@@ -19,6 +19,7 @@ export default function AmbientPlayer() {
     setVolume,
     setLoopMode,
     addTrack,
+    uploading,
   } = useAmbientPlayer()
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -143,7 +144,8 @@ export default function AmbientPlayer() {
       {/* Add button */}
       <button
         onClick={() => fileInputRef.current?.click()}
-        style={btnStyle(false)}
+        disabled={uploading}
+        style={btnStyle(uploading)}
         title="Add MP3"
       >
         <Plus size={12} />

@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { toast } from 'react-toastify'
 import { useAppStore } from '@/lib/store'
 import { DEFAULT_TRACKS, type AmbientTrack } from '@/lib/ambientTracks'
 
@@ -15,6 +16,7 @@ interface IDBTrackRecord {
   id: string
   name: string
   buffer: ArrayBuffer
+  mimeType: string
 }
 
 function openDB(): Promise<IDBDatabase> {
@@ -64,6 +66,7 @@ export interface AmbientPlayerControls {
   setVolume: (v: number) => void
   setLoopMode: (mode: 'all' | 'one') => void
   addTrack: (file: File) => Promise<void>
+  uploading: boolean
 }
 
 // ── Hook ──────────────────────────────────────────────────────────────────
@@ -89,6 +92,7 @@ export function useAmbientPlayer(): AmbientPlayerControls {
   const currentTrackIdRef = useRef<string | null>(currentTrackId)
 
   const [tracks, setTracks] = useState<AmbientTrack[]>(DEFAULT_TRACKS)
+  const [uploading, setUploading] = useState(false)
 
   // Keep mutable refs in sync with state
   useEffect(() => { tracksRef.current = tracks }, [tracks])
@@ -113,7 +117,7 @@ export function useAmbientPlayer(): AmbientPlayerControls {
         if (cancelled) return
 
         const userTracks: AmbientTrack[] = records.map((r) => {
-          const url = URL.createObjectURL(new Blob([r.buffer], { type: 'audio/mpeg' }))
+          const url = URL.createObjectURL(new Blob([r.buffer], { type: r.mimeType || 'audio/mpeg' }))
           objectUrlsRef.current.push(url)
           return { id: r.id, name: r.name, src: url, isUser: true }
         })
@@ -245,35 +249,44 @@ export function useAmbientPlayer(): AmbientPlayerControls {
 
   const addTrack = useCallback(async (file: File) => {
     if (file.size > MAX_FILE_BYTES) {
-      console.warn(`useAmbientPlayer: file too large (${file.size} bytes), max is ${MAX_FILE_BYTES}`)
+      toast.error(`File quá lớn (tối đa ${MAX_FILE_BYTES / 1024 / 1024} MB)`)
       return
     }
-
-    const buffer = await file.arrayBuffer()
-    const id = crypto.randomUUID()
-    const name = file.name.replace(/\.[^.]+$/, '') // strip extension
 
     const db = dbRef.current
     if (!db) {
-      console.warn('useAmbientPlayer: IndexedDB not ready')
+      toast.error('Cơ sở dữ liệu âm thanh chưa sẵn sàng — thử lại sau')
       return
     }
 
-    await putTrack(db, { id, name, buffer })
+    setUploading(true)
+    try {
+      const buffer = await file.arrayBuffer()
+      const id = crypto.randomUUID()
+      const name = file.name.replace(/\.[^.]+$/, '') // strip extension
+      const mimeType = file.type || 'audio/mpeg'
 
-    const url = URL.createObjectURL(new Blob([buffer], { type: 'audio/mpeg' }))
-    objectUrlsRef.current.push(url)
+      await putTrack(db, { id, name, buffer, mimeType })
 
-    const newTrack: AmbientTrack = { id, name, src: url, isUser: true }
-    setTracks((prev) => [...prev, newTrack])
+      const url = URL.createObjectURL(new Blob([buffer], { type: mimeType }))
+      objectUrlsRef.current.push(url)
 
-    // Auto-select and play the new track
-    if (audioRef.current) {
-      audioRef.current.src = url
-      audioRef.current.play().catch(() => {})
+      const newTrack: AmbientTrack = { id, name, src: url, isUser: true }
+      setTracks((prev) => [...prev, newTrack])
+
+      // Auto-select and play the new track
+      if (audioRef.current) {
+        audioRef.current.src = url
+        audioRef.current.play().catch(() => {})
+      }
+      setAmbientTrack(id)
+      setAmbientPlaying(true)
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Upload thất bại'
+      toast.error(`Không thể thêm bài nhạc: ${msg}`)
+    } finally {
+      setUploading(false)
     }
-    setAmbientTrack(id)
-    setAmbientPlaying(true)
   }, [setAmbientTrack, setAmbientPlaying])
 
   return {
@@ -289,5 +302,6 @@ export function useAmbientPlayer(): AmbientPlayerControls {
     setVolume,
     setLoopMode,
     addTrack,
+    uploading,
   }
 }
