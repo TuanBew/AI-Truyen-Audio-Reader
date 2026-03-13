@@ -117,10 +117,16 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
           }
         }
 
-        // Guest fallback: use persisted store index
+        // Guest fallback: use persisted store index (only if it belongs to this chapter)
         if (restoredIndex === 0) {
-          const persistedIndex = useAppStore.getState().currentSentenceIndex
-          if (persistedIndex > 0 && persistedIndex < data.sentences.length) {
+          const state = useAppStore.getState()
+          const persistedIndex = state.currentSentenceIndex
+          const persistedUrl = state.currentChapterUrl
+          if (
+            persistedIndex > 0 &&
+            persistedIndex < data.sentences.length &&
+            persistedUrl === currentChapter?.source_url
+          ) {
             restoredIndex = persistedIndex
           }
         }
