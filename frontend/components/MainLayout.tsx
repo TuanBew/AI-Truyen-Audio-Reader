@@ -16,7 +16,7 @@ import ResizableHDivider from './ResizableHDivider'
 
 const SIDEBAR_MIN = 180
 const SIDEBAR_MAX = 440
-const PLAYER_MIN = 90
+const PLAYER_MIN = 130
 const PLAYER_MAX = 340
 
 export default function MainLayout() {

@@ -5,6 +5,7 @@ import { useAppStore } from '@/lib/store'
 import { toast } from 'react-toastify'
 import TTSPlayer from './TTSPlayer'
 import RecordingControls from './RecordingControls'
+import AmbientPlayer from './AmbientPlayer'
 
 export default function PlayerPanel() {
   const {
@@ -46,24 +47,30 @@ export default function PlayerPanel() {
     [setCurrentChapterUrl, setLoadingChapter, setCurrentChapter, activeNovelId, updateNovelProgress]
   )
 
-  if (!currentChapter) return null
-
   return (
-    <div className="flex flex-col h-full overflow-hidden" style={{ background: '#0d0d24', borderTop: '1px solid rgba(124,58,237,0.25)' }}>
-      <TTSPlayer
-        text={currentChapter.content}
-        chapterTitle={currentChapter.chapter_title}
-        chapterUrl={currentChapter.source_url}
-        onEnded={() => {
-          if (autoAdvance && currentChapter.next_url) {
-            setTimeout(() => navigateTo(currentChapter.next_url!), 800)
-          }
-        }}
-      />
-      <RecordingControls
-        text={currentChapter.content}
-        chapterTitle={currentChapter.chapter_title}
-      />
+    <div
+      className="flex flex-col h-full overflow-hidden"
+      style={{ background: '#0d0d24', borderTop: '1px solid rgba(124,58,237,0.25)' }}
+    >
+      {currentChapter && (
+        <>
+          <TTSPlayer
+            text={currentChapter.content}
+            chapterTitle={currentChapter.chapter_title}
+            chapterUrl={currentChapter.source_url}
+            onEnded={() => {
+              if (autoAdvance && currentChapter.next_url) {
+                setTimeout(() => navigateTo(currentChapter.next_url!), 800)
+              }
+            }}
+          />
+          <RecordingControls
+            text={currentChapter.content}
+            chapterTitle={currentChapter.chapter_title}
+          />
+        </>
+      )}
+      <AmbientPlayer />
     </div>
   )
 }
