@@ -21,12 +21,12 @@ const PROVIDER_LABELS: Record<TTSProvider, string> = {
 };
 
 const PROVIDER_COLORS: Record<TTSProvider, string> = {
-  gemini: "text-blue-400",
-  openai: "text-green-400",
-  minimax: "text-purple-400",
-  xtts: "text-orange-400",
-  edge: "text-cyan-400",
-  gtranslate: "text-yellow-400",
+  gemini: "#00ffff",
+  openai: "#00ffff",
+  minimax: "#00ffff",
+  xtts: "#00ffff",
+  edge: "#00ffff",
+  gtranslate: "#00ffff",
 };
 
 /** Chapter is marked "finished" when this % of words have been highlighted */
@@ -493,19 +493,30 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
   const { providerUsed, fallbackUsed, isLoading } = playerState;
 
   return (
-    <div className="relative px-4 py-3 flex flex-col gap-2">
+    <div
+      className="relative px-4 py-3 flex flex-col gap-2"
+      style={{ background: '#0d0d24', borderBottom: '1px solid rgba(124,58,237,0.25)' }}
+    >
       {/* Resume toast */}
       {resumeFromIndex > 0 && (
-        <div className="absolute bottom-full left-0 right-0 mb-2 mx-4 flex items-center justify-between rounded-xl bg-violet-900/80 px-4 py-2 text-sm text-white backdrop-blur">
+        <div
+          className="absolute bottom-full left-0 right-0 mb-2 mx-4 flex items-center justify-between rounded-xl px-4 py-2 text-sm backdrop-blur"
+          style={{ background: 'rgba(109,40,217,0.85)', color: '#e2e8f0', border: '1px solid rgba(124,58,237,0.4)' }}
+        >
           <span>Tiếp tục từ câu {resumeFromIndex + 1}?</span>
           <div className="flex gap-2">
             <button
               onClick={() => { seekToSentence(resumeFromIndex); setResumeFromIndex(0) }}
-              className="rounded-lg bg-violet-600 px-3 py-1 text-xs font-medium hover:bg-violet-500"
+              className="rounded-lg px-3 py-1 text-xs font-medium transition-colors"
+              style={{ background: '#7c3aed', color: '#fff', boxShadow: '0 0 8px rgba(124,58,237,0.5)' }}
             >
               Tiếp tục
             </button>
-            <button onClick={() => setResumeFromIndex(0)} className="text-xs text-gray-400 hover:text-white">
+            <button
+              onClick={() => setResumeFromIndex(0)}
+              className="text-xs transition-colors"
+              style={{ color: '#6d6d9a' }}
+            >
               Bỏ qua
             </button>
           </div>
@@ -529,7 +540,8 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
             onClick={() => synthesize()}
             disabled={isLoading}
             title="Tổng hợp lại"
-            className="p-1.5 rounded text-gray-400 hover:text-white hover:bg-gray-700 transition-colors disabled:opacity-40"
+            className="p-1.5 rounded transition-colors disabled:opacity-40"
+            style={{ color: '#a78bfa' }}
           >
             <RefreshCw size={14} className={isLoading ? "animate-spin" : ""} />
           </button>
@@ -538,15 +550,16 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
           <button
             onClick={handlePlayPause}
             disabled={isLoading}
-            className={`flex items-center justify-center w-10 h-10 rounded-full transition-colors ${
+            className="flex items-center justify-center w-10 h-10 rounded-full transition-colors"
+            style={
               isLoading
-                ? "bg-gray-700 text-gray-500 cursor-wait"
-                : "bg-indigo-600 hover:bg-indigo-500 text-white"
-            }`}
+                ? { background: 'rgba(124,58,237,0.2)', color: '#6d6d9a', cursor: 'wait' }
+                : { background: '#7c3aed', color: '#fff', boxShadow: '0 0 12px rgba(124,58,237,0.5)' }
+            }
             title={playerState.isPlaying ? "Dừng" : "Phát"}
           >
             {isLoading ? (
-              <Loader2 size={18} className="animate-spin" />
+              <Loader2 size={18} className="animate-spin" style={{ color: '#a78bfa' }} />
             ) : playerState.isPlaying ? (
               <Pause size={18} />
             ) : (
@@ -557,7 +570,8 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
           {/* Stop */}
           <button
             onClick={handleStop}
-            className="p-1.5 rounded text-gray-400 hover:text-red-400 hover:bg-gray-700 transition-colors"
+            className="p-1.5 rounded transition-colors"
+            style={{ color: '#a78bfa' }}
             title="Dừng hẳn"
           >
             <Square size={14} />
@@ -566,29 +580,33 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
 
         {/* Progress bar */}
         <div
-          className="flex-1 h-2 bg-gray-700 rounded-full cursor-pointer"
+          className="flex-1 h-2 rounded-full cursor-pointer"
+          style={{ background: 'rgba(124,58,237,0.15)' }}
           onClick={seekTo}
         >
           <div
-            className="h-full bg-indigo-500 rounded-full transition-all"
-            style={{ width: `${progress}%` }}
+            className="h-full rounded-full transition-all"
+            style={{ width: `${progress}%`, background: '#a78bfa' }}
           />
         </div>
 
         {/* Sentence counter */}
         {sentences.length > 0 && (
-          <span className="text-xs text-gray-500">
+          <span className="text-xs font-mono" style={{ color: '#6d6d9a' }}>
             S.{Math.max(1, currentSentenceIndex + 1)}/{sentences.length}
           </span>
         )}
 
         {/* Auto-advance toggle */}
-        <label className="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer select-none">
+        <label
+          className="flex items-center gap-1.5 text-xs cursor-pointer select-none"
+          style={{ color: playerState.autoAdvance ? '#a78bfa' : '#6d6d9a' }}
+        >
           <input
             type="checkbox"
             checked={playerState.autoAdvance}
             onChange={(e) => setAutoAdvance(e.target.checked)}
-            className="accent-indigo-500"
+            className="accent-violet-500"
           />
           Tự chuyển
         </label>
@@ -599,13 +617,13 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
 
       {/* Provider badge */}
       {providerUsed && (
-        <div className="flex items-center gap-1.5 text-xs">
-          <Volume2 size={12} className={PROVIDER_COLORS[providerUsed]} />
-          <span className={PROVIDER_COLORS[providerUsed]}>
+        <div className="flex items-center gap-1.5 text-xs font-mono">
+          <Volume2 size={12} style={{ color: PROVIDER_COLORS[providerUsed] }} />
+          <span style={{ color: PROVIDER_COLORS[providerUsed] }}>
             {PROVIDER_LABELS[providerUsed]}
           </span>
           {fallbackUsed && (
-            <span className="flex items-center gap-1 text-yellow-500">
+            <span className="flex items-center gap-1" style={{ color: '#fbbf24' }}>
               <AlertTriangle size={11} /> dự phòng
             </span>
           )}
