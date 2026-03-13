@@ -1,5 +1,8 @@
 'use client'
 
+// Schema: reading_progress(user_id, chapter_url, sentence_index, word_index, is_finished, updated_at)
+// One-time migration: ALTER TABLE reading_progress ADD COLUMN IF NOT EXISTS is_finished boolean DEFAULT false;
+
 import { useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAppStore } from '@/lib/store'

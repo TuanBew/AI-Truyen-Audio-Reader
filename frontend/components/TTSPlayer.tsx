@@ -9,6 +9,7 @@ import { toast } from "react-toastify";
 import { useAppStore } from "@/lib/store";
 import { supabase } from "@/lib/supabase";
 import type { TTSProvider, WordTiming } from "@/lib/types";
+import { useSyncProgress } from "@/lib/hooks/useSyncProgress";
 
 const PROVIDER_LABELS: Record<TTSProvider, string> = {
   gemini: "Google Gemini",
@@ -63,6 +64,8 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
   const abortAllPrefetches = useAppStore((s) => s.abortAllPrefetches);
   const setCurrentSentenceIndex = useAppStore((s) => s.setCurrentSentenceIndex);
   const setCurrentSentenceWordTimings = useAppStore((s) => s.setCurrentSentenceWordTimings);
+
+  const syncProgress = useSyncProgress();
 
   const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -227,9 +230,13 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
       setCurrentSentenceIndex(index);
       setPlaying(true);
 
+      // Sync progress to Supabase (debounced 1s; no-op for guests)
+      const totalSentences = useAppStore.getState().sentenceQueue.sentences.length;
+      const isFinished = index >= totalSentences - 1;
+      syncProgress(chapterUrl, index, -1, isFinished);
+
       // Prefetch the next sentence (1-sentence lookahead)
       const next = index + 1;
-      const totalSentences = useAppStore.getState().sentenceQueue.sentences.length;
       if (next < totalSentences) {
         synthesizeSentence(next); // fire-and-forget; AbortController handles cancellation
       }
@@ -238,7 +245,7 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
       const toEvict = index - 2;
       if (toEvict >= 0) evictSentenceAudio(toEvict);
     },
-    [synthesizeSentence, setCurrentSentenceIndex, setPlaying, evictSentenceAudio]
+    [synthesizeSentence, setCurrentSentenceIndex, setPlaying, evictSentenceAudio, syncProgress, chapterUrl]
   );
 
   const seekToSentence = useCallback(
