@@ -52,24 +52,26 @@ export default function PlayerPanel() {
       className="flex flex-col h-full overflow-hidden"
       style={{ background: '#0d0d24', borderTop: '1px solid rgba(124,58,237,0.25)' }}
     >
-      {currentChapter && (
-        <>
-          <TTSPlayer
-            text={currentChapter.content}
-            chapterTitle={currentChapter.chapter_title}
-            chapterUrl={currentChapter.source_url}
-            onEnded={() => {
-              if (autoAdvance && currentChapter.next_url) {
-                setTimeout(() => navigateTo(currentChapter.next_url!), 800)
-              }
-            }}
-          />
-          <RecordingControls
-            text={currentChapter.content}
-            chapterTitle={currentChapter.chapter_title}
-          />
-        </>
-      )}
+      <div style={{ flex: '1 1 0', minHeight: 0, overflowY: 'auto' }}>
+        {currentChapter && (
+          <>
+            <TTSPlayer
+              text={currentChapter.content}
+              chapterTitle={currentChapter.chapter_title}
+              chapterUrl={currentChapter.source_url}
+              onEnded={() => {
+                if (autoAdvance && currentChapter.next_url) {
+                  setTimeout(() => navigateTo(currentChapter.next_url!), 800)
+                }
+              }}
+            />
+            <RecordingControls
+              text={currentChapter.content}
+              chapterTitle={currentChapter.chapter_title}
+            />
+          </>
+        )}
+      </div>
       <AmbientPlayer />
     </div>
   )

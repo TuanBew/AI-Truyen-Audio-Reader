@@ -237,10 +237,14 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
       const isFinished = index >= totalSentences - 1;
       syncProgress(chapterUrl, index, -1, isFinished);
 
-      // Prefetch the next sentence (1-sentence lookahead)
+      // Prefetch the next two sentences (2-sentence lookahead reduces inter-sentence gaps)
       const next = index + 1;
       if (next < totalSentences) {
         synthesizeSentence(next); // fire-and-forget; AbortController handles cancellation
+      }
+      const next2 = index + 2;
+      if (next2 < totalSentences) {
+        synthesizeSentence(next2); // fire-and-forget; second lookahead
       }
 
       // Evict sentence from 2 before current (retain current-1, current, current+1)
