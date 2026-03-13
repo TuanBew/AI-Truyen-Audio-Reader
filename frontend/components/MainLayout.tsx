@@ -2,15 +2,21 @@
 
 import { useState } from "react";
 import { Settings, Headphones } from "lucide-react";
+import { useAuth } from "@/lib/hooks/useAuth";
 import { useAppStore } from "@/lib/store";
 import ChapterSidebar from "./ChapterSidebar";
 import ReaderPanel from "./ReaderPanel";
 import SettingsPanel from "./SettingsPanel";
 import HomePage from "./HomePage";
+import AuthModal from "./AuthModal";
+import UserMenu from "./UserMenu";
 
 export default function MainLayout() {
   const { view, setView, settingsPanelOpen, toggleSettingsPanel } = useAppStore();
   const [sidebarWidth] = useState(320);
+  useAuth()  // Mount Supabase session listener at root
+  const authState = useAppStore((s) => s.authState)
+  const [authModalOpen, setAuthModalOpen] = useState(false)
 
   if (view === "home") {
     return <HomePage />;
@@ -42,13 +48,25 @@ export default function MainLayout() {
             </span>
           </button>
 
-          <button
-            onClick={toggleSettingsPanel}
-            className="p-1.5 rounded hover:bg-gray-700 transition-colors text-gray-400 hover:text-white"
-            title="Cài đặt"
-          >
-            <Settings size={18} />
-          </button>
+          <div className="flex items-center gap-2">
+            {authState.supabaseUserId ? (
+              <UserMenu email={authState.supabaseEmail ?? ''} syncStatus={authState.syncStatus} />
+            ) : (
+              <button
+                onClick={() => setAuthModalOpen(true)}
+                className="rounded-xl bg-violet-600 px-4 py-1.5 text-sm font-medium text-white transition hover:bg-violet-500"
+              >
+                Đăng nhập
+              </button>
+            )}
+            <button
+              onClick={toggleSettingsPanel}
+              className="p-1.5 rounded hover:bg-gray-700 transition-colors text-gray-400 hover:text-white"
+              title="Cài đặt"
+            >
+              <Settings size={18} />
+            </button>
+          </div>
         </header>
 
         {/* Reader takes remaining height */}
@@ -69,6 +87,9 @@ export default function MainLayout() {
           </div>
         </div>
       )}
+
+      {/* ── Auth Modal (portal-style overlay) ─────────────── */}
+      <AuthModal isOpen={authModalOpen} onClose={() => setAuthModalOpen(false)} />
     </div>
   );
 }

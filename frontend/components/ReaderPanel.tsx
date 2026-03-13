@@ -156,32 +156,31 @@ export default function ReaderPanel() {
       {/* Chapter text with word-level highlighting */}
       <div
         ref={contentRef}
-        className="flex-1 overflow-y-auto px-8 py-6 max-w-3xl mx-auto w-full"
+        className="flex-1 overflow-y-auto px-8 py-6 w-full"
       >
-        <p className="text-gray-200 leading-relaxed text-base">
-          {wordTokens.map((token) => {
-            const isHighlighted = token.globalIndex <= highlightedWordIndex;
-            const isCurrent = token.globalIndex === highlightedWordIndex;
-            return (
-              <span key={token.globalIndex}>
-                {/* Paragraph break — render space + newline equivalent */}
-                {token.paraBreakBefore && <br className="mb-3 block" />}
-                <span
-                  ref={isCurrent ? highlightedRef : undefined}
-                  className={`transition-colors duration-100 ${
-                    isCurrent
-                      ? "bg-indigo-500 text-white rounded px-0.5"
-                      : isHighlighted
-                      ? "text-indigo-200"
-                      : "text-gray-200"
-                  }`}
-                >
-                  {token.word}
-                </span>{" "}
-              </span>
-            );
-          })}
-        </p>
+        <div className="mx-auto max-w-[72ch] text-[1.25rem] leading-[1.85] text-gray-100 [&>p]:mb-[1.5em] font-sans tracking-wide">
+          <p>
+            {wordTokens.map((token) => {
+              const isCurrent = token.globalIndex === highlightedWordIndex;
+              return (
+                <span key={token.globalIndex}>
+                  {/* Paragraph break — render space + newline equivalent */}
+                  {token.paraBreakBefore && <br className="mb-3 block" />}
+                  <span
+                    ref={isCurrent ? highlightedRef : undefined}
+                    className={`transition-colors duration-100 ${
+                      isCurrent
+                        ? "text-amber-300 underline decoration-amber-400/50 decoration-2"
+                        : ""
+                    }`}
+                  >
+                    {token.word}
+                  </span>{" "}
+                </span>
+              );
+            })}
+          </p>
+        </div>
       </div>
 
       {/* Prev / Next navigation */}

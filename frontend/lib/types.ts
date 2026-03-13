@@ -2,7 +2,7 @@
 
 export type AudioFormat = "mp3" | "wav";
 
-export type TTSProvider = "gemini" | "openai" | "minimax" | "gtranslate";
+export type TTSProvider = "gemini" | "openai" | "minimax" | "xtts" | "gtranslate";
 
 export interface ChapterMeta {
   title: string;
@@ -41,6 +41,8 @@ export interface TTSSettings {
   // Common
   speed: number;
   pitch: number;
+  // XTTS
+  xttsEndpoint: string;  // default: "http://localhost:5002"
   // API keys (stored in localStorage, sent to backend in headers)
   openaiApiKey: string;
   minimaxApiKey: string;
@@ -90,6 +92,26 @@ export interface SavedNovel {
 
 export type AppView = "home" | "reader";
 
+// ─── Sentence Queue ───────────────────────────────────────────
+export interface SentenceQueueState {
+  sentences: string[]
+  currentSentenceIndex: number
+  sentenceAudioCache: Record<number, string>    // blob URLs — NOT persisted
+  prefetchingSentenceIndex: number
+  // In store (not component state) so seek logic can cancel from anywhere
+  sentenceAbortControllers: Record<number, AbortController>
+  currentSentenceWordTimings: WordTiming[]
+}
+
+// ─── Auth ────────────────────────────────────────────────────
+export type SyncStatus = 'idle' | 'syncing' | 'synced' | 'offline'
+
+export interface AuthState {
+  supabaseUserId: string | null
+  supabaseEmail: string | null
+  syncStatus: SyncStatus
+}
+
 export interface AppState {
   // View / navigation
   view: AppView;
@@ -121,4 +143,7 @@ export interface AppState {
 
   // UI
   settingsPanelOpen: boolean;
+
+  // Sentence queue (transient)
+  sentenceQueue: SentenceQueueState;
 }

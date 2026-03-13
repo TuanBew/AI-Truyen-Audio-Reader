@@ -42,13 +42,10 @@ def _validate_service_account(data: dict) -> list[str]:
 
 
 def _test_google_cloud_connection() -> tuple[bool, str]:
-    """
-    Attempt a lightweight real call to Google Cloud TTS (list_voices).
-    Returns (success: bool, error_message: str).
-    """
+    """Test Google Cloud TTS connectivity via the cached singleton."""
     try:
-        from google.cloud import texttospeech
-        client = texttospeech.TextToSpeechClient()
+        from services import tts_gemini
+        client = tts_gemini.get_client()
         client.list_voices(language_code="vi-VN")
         return True, ""
     except Exception as e:
@@ -93,6 +90,9 @@ async def upload_credentials(file: UploadFile = File(...)):
 
     # Update env var in current process so new TTS calls pick it up immediately
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(CREDENTIALS_FILE)
+    # Invalidate the cached TTS client so the next request uses the new credentials.
+    from services import tts_gemini as _tts_gemini
+    _tts_gemini.reset_client()
 
     logger.info("Service account credentials saved to %s", CREDENTIALS_FILE)
 

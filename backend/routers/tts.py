@@ -6,27 +6,82 @@ Returns audio bytes with provider info in headers.
 import base64
 import io
 import logging
+import re as _re
 from enum import Enum
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse, JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
+import os
+
 from services import tts_gemini, tts_openai, tts_minimax, tts_gtranslate
+from services.tts_xtts import synthesize as xtts_synthesize, XTTSTTSError, XTTSQuotaError
 from google.cloud import texttospeech as gctts
 
 router = APIRouter()
 limiter = Limiter(key_func=get_remote_address)
 logger = logging.getLogger(__name__)
 
+_ABBREV_RE = _re.compile(
+    r'\b(Mr|Mrs|Ms|Dr|Prof|St|Jr|Sr|vs|etc|No|Vol|pp|e\.g|i\.e)\.',
+    _re.IGNORECASE
+)
+# Numbered list prefixes require a trailing space so "3.14" is NOT protected
+_NUMBERED_LIST_RE = _re.compile(r'(?<!\d)\b\d+\.\s')
+
+
+def _split_into_sentences(text: str) -> list[str]:
+    """Vietnamese-aware sentence splitter. Max 300 chars per sentence."""
+    text = text.replace('...', '\x00EL\x00')
+
+    def _protect(m: _re.Match) -> str:
+        return m.group(0).replace('.', '\x00DOT\x00')
+
+    text = _ABBREV_RE.sub(_protect, text)
+    text = _NUMBERED_LIST_RE.sub(_protect, text)
+
+    parts = _re.split(r'(?<=[.!?…])\s+', text.strip())
+    parts = [
+        p.replace('\x00EL\x00', '...').replace('\x00DOT\x00', '.')
+        for p in parts if p.strip()
+    ]
+
+    # Enforce 300-char max by splitting at last word boundary
+    result: list[str] = []
+    for part in parts:
+        while len(part) > 300:
+            split_pos = part.rfind(' ', 0, 300)
+            if split_pos == -1:
+                split_pos = 300
+            result.append(part[:split_pos].strip())
+            part = part[split_pos:].strip()
+        if part:
+            result.append(part)
+
+    # Merge sentences shorter than 5 chars with the next one
+    merged: list[str] = []
+    i = 0
+    while i < len(result):
+        s = result[i]
+        if len(s.strip()) < 5 and i + 1 < len(result):
+            merged.append(s.strip() + ' ' + result[i + 1].strip())
+            i += 2
+        else:
+            merged.append(s)
+            i += 1
+
+    return [s for s in merged if s.strip()]
+
 
 class TTSProvider(str, Enum):
     gemini = "gemini"
     openai = "openai"
     minimax = "minimax"
+    xtts = "xtts"
     gtranslate = "gtranslate"
 
 
@@ -42,6 +97,8 @@ class TTSRequest(BaseModel):
     openai_model: str = "tts-1"
     # MiniMax options
     minimax_voice_id: str = "male-qn-qingse"
+    # XTTS options
+    xtts_endpoint: str | None = None
     # Common
     speed: float = Field(1.0, ge=0.5, le=2.0)
     pitch: float = Field(0.0, ge=-10.0, le=10.0)
@@ -52,6 +109,17 @@ class TTSResult(BaseModel):
     fallback_used: bool
     fallback_reason: Optional[str]
     audio_format: str
+
+
+class SplitRequest(BaseModel):
+    text: str
+
+    @field_validator("text")
+    @classmethod
+    def text_max_length(cls, v: str) -> str:
+        if len(v) > 5000:
+            raise ValueError("Text exceeds 5000 character limit")
+        return v
 
 
 def _encoding_from_format(fmt: str) -> "gctts.AudioEncoding":
@@ -83,6 +151,7 @@ def _run_provider_chain(
         TTSProvider.gemini,
         TTSProvider.openai,
         TTSProvider.minimax,
+        TTSProvider.xtts,
         TTSProvider.gtranslate,
     ]
     start_idx = all_providers.index(body.preferred_provider)
@@ -128,6 +197,10 @@ def _run_provider_chain(
                     audio_format=body.audio_format,
                 )
 
+            elif provider == TTSProvider.xtts:
+                xtts_endpoint = body.xtts_endpoint or os.getenv("XTTS_ENDPOINT", "http://localhost:5002")
+                audio_bytes = xtts_synthesize(text=body.text, endpoint=xtts_endpoint)
+
             elif provider == TTSProvider.gtranslate:
                 audio_bytes = tts_gtranslate.synthesize_long(
                     text=body.text,
@@ -144,6 +217,7 @@ def _run_provider_chain(
             tts_gemini.GeminiQuotaError,
             tts_openai.OpenAIQuotaError,
             tts_minimax.MiniMaxQuotaError,
+            XTTSQuotaError,
         ) as e:
             reason = f"{provider.value} quota exhausted: {e}"
             logger.warning(reason)
@@ -156,6 +230,7 @@ def _run_provider_chain(
             tts_openai.OpenAITTSError,
             tts_minimax.MiniMaxTTSError,
             tts_gtranslate.GTTranslateTTSError,
+            XTTSTTSError,
         ) as e:
             reason = f"{provider.value} error: {e}"
             logger.warning(reason)
@@ -231,3 +306,11 @@ async def synthesize_with_timing(request: Request, body: TTSRequest):
 async def list_gemini_voices(language_code: str = "vi-VN"):
     """List available Gemini/Google TTS voices."""
     return tts_gemini.list_voices(language_code=language_code)
+
+
+@router.post("/split-sentences")
+@limiter.limit("120/minute")
+async def split_sentences(request: Request, body: SplitRequest):
+    """Split chapter text into Vietnamese sentences for sentence-by-sentence TTS."""
+    sentences = _split_into_sentences(body.text)
+    return {"sentences": sentences, "count": len(sentences)}
