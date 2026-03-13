@@ -197,46 +197,122 @@ function GeminiCredentialsUploader() {
   );
 }
 
-// ─── CollapsibleSection ───────────────────────────────────────────────────────
+// ─── ProviderConfig ───────────────────────────────────────────────────────────
 
-function CollapsibleSection({
-  title, badge, defaultOpen = false, children
+function ProviderConfig({
+  provider,
+  ttsSettings,
+  sl,
 }: {
-  title: string
-  badge?: string
-  defaultOpen?: boolean
-  children: React.ReactNode
+  provider: TTSProvider
+  ttsSettings: { geminiVoice: string; openaiApiKey: string; openaiVoice: string; minimaxApiKey: string; minimaxGroupId: string; minimaxVoiceId: string; xttsEndpoint: string }
+  sl: (field: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => void
 }) {
-  const [open, setOpen] = useState(defaultOpen)
-  return (
-    <div className="overflow-hidden rounded-xl border border-white/10">
-      <button
-        onClick={() => setOpen(!open)}
-        className="flex w-full items-center justify-between px-4 py-3 text-left"
-      >
-        <span className="text-sm font-medium text-gray-300">{title}</span>
-        <div className="flex items-center gap-2">
-          {badge && <span className="text-xs text-green-400">{badge}</span>}
-          <span className="text-xs text-gray-500">{open ? '▲' : '▼'}</span>
+  switch (provider) {
+    case 'gemini':
+      return (
+        <div className="mt-3 flex flex-col gap-3">
+          <div>
+            <label className="text-xs text-gray-500 mb-1 block">Giọng</label>
+            <select
+              value={ttsSettings.geminiVoice}
+              onChange={sl('geminiVoice')}
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-indigo-500"
+            >
+              {GEMINI_VOICES.map((v) => <option key={v} value={v}>{v}</option>)}
+            </select>
+          </div>
+          <GeminiCredentialsUploader />
         </div>
-      </button>
-      {open && <div className="border-t border-white/10 px-4 pb-4 pt-2">{children}</div>}
-    </div>
-  )
+      )
+    case 'openai':
+      return (
+        <div className="mt-3 flex flex-col gap-2">
+          <div>
+            <label className="text-xs text-gray-500 mb-1 block">API Key</label>
+            <input
+              type="password"
+              value={ttsSettings.openaiApiKey}
+              onChange={sl('openaiApiKey')}
+              placeholder="sk-..."
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-xs text-gray-300 placeholder-gray-600 focus:outline-none focus:border-indigo-500"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-gray-500 mb-1 block">Giọng</label>
+            <select
+              value={ttsSettings.openaiVoice}
+              onChange={sl('openaiVoice')}
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-indigo-500"
+            >
+              {OPENAI_VOICES.map((v) => <option key={v} value={v}>{v}</option>)}
+            </select>
+          </div>
+        </div>
+      )
+    case 'minimax':
+      return (
+        <div className="mt-3 flex flex-col gap-2">
+          <div>
+            <label className="text-xs text-gray-500 mb-1 block">API Key</label>
+            <input
+              type="password"
+              value={ttsSettings.minimaxApiKey}
+              onChange={sl('minimaxApiKey')}
+              placeholder="MiniMax API key"
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-xs text-gray-300 placeholder-gray-600 focus:outline-none focus:border-indigo-500"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-gray-500 mb-1 block">Group ID</label>
+            <input
+              type="text"
+              value={ttsSettings.minimaxGroupId}
+              onChange={sl('minimaxGroupId')}
+              placeholder="MiniMax Group ID"
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-xs text-gray-300 placeholder-gray-600 focus:outline-none focus:border-indigo-500"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-gray-500 mb-1 block">Giọng</label>
+            <select
+              value={ttsSettings.minimaxVoiceId}
+              onChange={sl('minimaxVoiceId')}
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-indigo-500"
+            >
+              {MINIMAX_VOICES.map((v) => <option key={v} value={v}>{v}</option>)}
+            </select>
+          </div>
+        </div>
+      )
+    case 'xtts':
+      return (
+        <div className="mt-3">
+          <label className="text-xs text-gray-500 mb-1 block">Endpoint URL</label>
+          <input
+            type="url"
+            value={ttsSettings.xttsEndpoint}
+            onChange={sl('xttsEndpoint')}
+            placeholder="http://localhost:5002"
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-xs text-gray-300 placeholder-gray-600 focus:outline-none focus:border-indigo-500"
+          />
+        </div>
+      )
+    case 'gtranslate':
+      return (
+        <p className="mt-2 text-xs text-gray-600 italic">
+          Không cần cấu hình — dùng làm dự phòng cuối cùng
+        </p>
+      )
+    default:
+      return null
+  }
 }
 
 // ─── Main SettingsPanel ───────────────────────────────────────────────────────
 
 export default function SettingsPanel() {
   const { ttsSettings, updateTTSSettings, toggleSettingsPanel } = useAppStore();
-  const [credentialsStatus, setCredentialsStatus] = useState<CredStatus>(null);
-
-  useEffect(() => {
-    fetch("/api/auth/credentials-status")
-      .then((r) => r.json())
-      .then((d) => setCredentialsStatus(d))
-      .catch(() => {});
-  }, []);
 
   const sl = (field: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     updateTTSSettings({ [field]: e.target.value });
@@ -264,29 +340,41 @@ export default function SettingsPanel() {
             Nhà cung cấp TTS
           </h3>
           <div className="flex flex-col gap-2">
-            {PROVIDERS.map((p) => (
-              <label
-                key={p.value}
-                className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
-                  ttsSettings.preferredProvider === p.value
-                    ? "border-indigo-500 bg-indigo-600/10"
-                    : "border-gray-700 hover:border-gray-600"
-                }`}
-              >
-                <input
-                  type="radio"
-                  name="provider"
-                  value={p.value}
-                  checked={ttsSettings.preferredProvider === p.value}
-                  onChange={() => updateTTSSettings({ preferredProvider: p.value })}
-                  className="mt-0.5 accent-indigo-500"
-                />
-                <div>
-                  <p className="text-sm font-medium text-white">{p.label}</p>
-                  <p className="text-xs text-gray-500">{p.description}</p>
+            {PROVIDERS.map((p) => {
+              const isActive = ttsSettings.preferredProvider === p.value
+              return (
+                <div
+                  key={p.value}
+                  className={`rounded-lg border p-3 transition-colors ${
+                    isActive
+                      ? 'border-indigo-500 bg-indigo-600/10'
+                      : 'border-gray-700 hover:border-gray-600'
+                  }`}
+                >
+                  <label className="flex items-start gap-3 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="provider"
+                      value={p.value}
+                      checked={isActive}
+                      onChange={() => updateTTSSettings({ preferredProvider: p.value })}
+                      className="mt-0.5 accent-indigo-500"
+                    />
+                    <div>
+                      <p className="text-sm font-medium text-white">{p.label}</p>
+                      <p className="text-xs text-gray-500">{p.description}</p>
+                    </div>
+                  </label>
+                  {isActive && (
+                    <ProviderConfig
+                      provider={p.value}
+                      ttsSettings={ttsSettings}
+                      sl={sl}
+                    />
+                  )}
                 </div>
-              </label>
-            ))}
+              )
+            })}
           </div>
         </section>
 
@@ -307,6 +395,10 @@ export default function SettingsPanel() {
                 onChange={slNum("speed")}
                 className="w-full accent-indigo-500"
               />
+              <div className="flex justify-between mt-0.5">
+                <span className="text-xs text-gray-600">0.5×</span>
+                <span className="text-xs text-gray-600">2.0×</span>
+              </div>
             </div>
             <div>
               <div className="flex justify-between mb-1">
@@ -319,113 +411,13 @@ export default function SettingsPanel() {
                 onChange={slNum("pitch")}
                 className="w-full accent-indigo-500"
               />
+              <div className="flex justify-between mt-0.5">
+                <span className="text-xs text-gray-600">–10</span>
+                <span className="text-xs text-gray-600">+10</span>
+              </div>
             </div>
           </div>
         </section>
-
-        {/* Gemini voice + credentials */}
-        <section>
-          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
-            Giọng Gemini (Google Cloud)
-          </h3>
-          <select
-            value={ttsSettings.geminiVoice}
-            onChange={sl("geminiVoice")}
-            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-indigo-500 mb-4"
-          >
-            {GEMINI_VOICES.map((v) => (
-              <option key={v} value={v}>{v}</option>
-            ))}
-          </select>
-
-          <CollapsibleSection
-            title="Google Cloud Credentials"
-            badge={credentialsStatus?.configured ? "Configured ✓" : undefined}
-            defaultOpen={false}
-          >
-            <GeminiCredentialsUploader />
-          </CollapsibleSection>
-        </section>
-
-        {/* OpenAI */}
-        <CollapsibleSection title="OpenAI API Key" defaultOpen={false}>
-          <div className="flex flex-col gap-2 pt-1">
-            <div>
-              <label className="text-xs text-gray-500 mb-1 block">API Key</label>
-              <input
-                type="password"
-                value={ttsSettings.openaiApiKey}
-                onChange={sl("openaiApiKey")}
-                placeholder="sk-..."
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-xs text-gray-300 placeholder-gray-600 focus:outline-none focus:border-indigo-500"
-              />
-            </div>
-            <div>
-              <label className="text-xs text-gray-500 mb-1 block">Giọng</label>
-              <select
-                value={ttsSettings.openaiVoice}
-                onChange={sl("openaiVoice")}
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-indigo-500"
-              >
-                {OPENAI_VOICES.map((v) => (
-                  <option key={v} value={v}>{v}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-        </CollapsibleSection>
-
-        {/* MiniMax */}
-        <CollapsibleSection title="MiniMax API Key" defaultOpen={false}>
-          <div className="flex flex-col gap-2 pt-1">
-            <div>
-              <label className="text-xs text-gray-500 mb-1 block">API Key</label>
-              <input
-                type="password"
-                value={ttsSettings.minimaxApiKey}
-                onChange={sl("minimaxApiKey")}
-                placeholder="MiniMax API key"
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-xs text-gray-300 placeholder-gray-600 focus:outline-none focus:border-indigo-500"
-              />
-            </div>
-            <div>
-              <label className="text-xs text-gray-500 mb-1 block">Group ID</label>
-              <input
-                type="text"
-                value={ttsSettings.minimaxGroupId}
-                onChange={sl("minimaxGroupId")}
-                placeholder="MiniMax Group ID"
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-xs text-gray-300 placeholder-gray-600 focus:outline-none focus:border-indigo-500"
-              />
-            </div>
-            <div>
-              <label className="text-xs text-gray-500 mb-1 block">Giọng</label>
-              <select
-                value={ttsSettings.minimaxVoiceId}
-                onChange={sl("minimaxVoiceId")}
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-indigo-500"
-              >
-                {MINIMAX_VOICES.map((v) => (
-                  <option key={v} value={v}>{v}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-        </CollapsibleSection>
-
-        {/* Local XTTS Server */}
-        <CollapsibleSection title="Local XTTS Server" defaultOpen={false}>
-          <div className="pt-1">
-            <label className="text-xs text-gray-500 mb-1 block">Endpoint URL</label>
-            <input
-              type="url"
-              value={ttsSettings.xttsEndpoint}
-              onChange={sl("xttsEndpoint")}
-              placeholder="http://localhost:5002"
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-xs text-gray-300 placeholder-gray-600 focus:outline-none focus:border-indigo-500"
-            />
-          </div>
-        </CollapsibleSection>
       </div>
 
       <div className="px-5 py-3 border-t border-gray-700 text-xs text-gray-600 text-center">
@@ -434,4 +426,3 @@ export default function SettingsPanel() {
     </div>
   );
 }
-
