@@ -74,6 +74,7 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
   // Deduplication map: index → in-flight promise, so concurrent calls share one request
   const pendingRef = useRef<Map<number, Promise<string | null>>>(new Map());
   const [progress, setProgress] = useState(0);
+  const [scrubberTooltip, setScrubberTooltip] = useState<{ x: number; label: string } | null>(null);
   const markedFinishedRef = useRef(false);
   const [resumeFromIndex, setResumeFromIndex] = useState(0);
 
@@ -415,6 +416,24 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
     el.currentTime = (x / rect.width) * el.duration;
   };
 
+  const handleScrubberClick = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      if (sentences.length === 0) return;
+      const rect = e.currentTarget.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const targetIdx = Math.min(
+        sentences.length - 1,
+        Math.floor((x / rect.width) * sentences.length)
+      );
+      seekToSentence(targetIdx);
+    },
+    [sentences.length, seekToSentence]
+  );
+
+  const scrubberFill = sentences.length <= 1
+    ? 100
+    : (currentSentenceIndex / (sentences.length - 1)) * 100;
+
   const { providerUsed, fallbackUsed, isLoading } = playerState;
 
   return (
@@ -524,16 +543,41 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
           </button>
         </div>
 
-        {/* Progress bar */}
+        {/* Sentence-aware scrubber */}
         <div
-          className="flex-1 h-2 rounded-full cursor-pointer"
+          className="relative flex-1 h-2 rounded-full cursor-pointer"
           style={{ background: 'rgba(124,58,237,0.15)' }}
-          onClick={seekTo}
+          onClick={handleScrubberClick}
+          onMouseMove={(e) => {
+            if (sentences.length === 0) return;
+            const rect = e.currentTarget.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const targetIdx = Math.min(
+              sentences.length - 1,
+              Math.floor((x / rect.width) * sentences.length)
+            );
+            setScrubberTooltip({ x, label: `Câu ${targetIdx + 1}` });
+          }}
+          onMouseLeave={() => setScrubberTooltip(null)}
         >
           <div
             className="h-full rounded-full transition-all"
-            style={{ width: `${progress}%`, background: '#a78bfa' }}
+            style={{ width: `${scrubberFill}%`, background: '#a78bfa' }}
           />
+          {scrubberTooltip && (
+            <span
+              className="absolute -top-6 text-xs px-1.5 py-0.5 rounded pointer-events-none"
+              style={{
+                left: scrubberTooltip.x,
+                transform: 'translateX(-50%)',
+                background: 'rgba(124,58,237,0.9)',
+                color: '#fff',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {scrubberTooltip.label}
+            </span>
+          )}
         </div>
 
         {/* Sentence counter */}
