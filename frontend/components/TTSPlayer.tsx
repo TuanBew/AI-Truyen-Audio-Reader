@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import {
-  Play, Pause, Square, Volume2, AlertTriangle, Loader2, RefreshCw
+  Play, Pause, Square, Volume2, AlertTriangle, Loader2, RefreshCw, SkipBack, SkipForward
 } from "lucide-react";
 import AudioVisualizer from "./AudioVisualizer";
 import { toast } from "react-toastify";
@@ -470,6 +470,17 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
             <RefreshCw size={14} />
           </button>
 
+          {/* Prev sentence */}
+          <button
+            onClick={() => seekToSentence(currentSentenceIndex - 1)}
+            disabled={currentSentenceIndex <= 0}
+            title="Câu trước"
+            className="p-1.5 rounded transition-colors disabled:opacity-40"
+            style={{ color: '#a78bfa' }}
+          >
+            <SkipBack size={14} />
+          </button>
+
           {/* Play / Pause */}
           <button
             onClick={handlePlayPause}
@@ -489,6 +500,17 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
             ) : (
               <Play size={18} />
             )}
+          </button>
+
+          {/* Next sentence */}
+          <button
+            onClick={() => seekToSentence(currentSentenceIndex + 1)}
+            disabled={currentSentenceIndex >= sentences.length - 1}
+            title="Câu tiếp"
+            className="p-1.5 rounded transition-colors disabled:opacity-40"
+            style={{ color: '#a78bfa' }}
+          >
+            <SkipForward size={14} />
           </button>
 
           {/* Stop */}
