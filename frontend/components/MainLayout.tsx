@@ -138,6 +138,20 @@ export default function MainLayout() {
       )}
 
       <AuthModal isOpen={authModalOpen} onClose={() => setAuthModalOpen(false)} />
+      {/* Neon bottom border — fixed so it spans the full viewport width regardless of flex layout */}
+      <div
+        aria-hidden="true"
+        style={{
+          position: 'fixed',
+          bottom: 0,
+          left: 0,
+          right: 0,
+          height: '1px',
+          zIndex: 9999,
+          pointerEvents: 'none',
+          background: 'linear-gradient(90deg, transparent, rgba(0,255,255,0.2), rgba(124,58,237,0.3), rgba(0,255,255,0.2), transparent)',
+        }}
+      />
     </div>
   )
 }
