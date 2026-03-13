@@ -2,7 +2,7 @@
 
 export type AudioFormat = "mp3" | "wav";
 
-export type TTSProvider = "gemini" | "openai" | "minimax" | "xtts" | "gtranslate";
+export type TTSProvider = "gemini" | "openai" | "minimax" | "xtts" | "edge" | "gtranslate";
 
 export interface ChapterMeta {
   title: string;
