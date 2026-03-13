@@ -225,7 +225,13 @@ export const useAppStore = create<AppStore>()(
       setNovelUrl: (url) => set({ novelUrl: url }),
       setToc: (toc) => set({ toc }),
       setCurrentChapter: (chapter) => set({ currentChapter: chapter }),
-      setCurrentChapterUrl: (url) => set({ currentChapterUrl: url }),
+      setCurrentChapterUrl: (url) =>
+        set((state) => ({
+          currentChapterUrl: url,
+          // Reset sentence index when switching chapters so the guest resume fallback
+          // never reads a stale index from a different chapter
+          ...(url !== state.currentChapterUrl ? { currentSentenceIndex: -1 } : {}),
+        })),
       setLoadingToc: (v) => set({ loadingToc: v }),
       setLoadingChapter: (v) => set({ loadingChapter: v }),
 
