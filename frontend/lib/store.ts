@@ -97,6 +97,7 @@ interface AppStore extends AppState {
   evictSentenceAudio: (index: number) => void;
   registerAbortController: (index: number, controller: AbortController) => void;
   abortAllPrefetches: () => void;
+  clearSentenceAudioCache: () => void;
   setCurrentSentenceWordTimings: (timings: WordTiming[]) => void;
 
   // Ambient player
@@ -378,6 +379,16 @@ export const useAppStore = create<AppStore>()(
               sentenceAbortControllers: {},
               prefetchingSentenceIndex: -1,
             },
+          }
+        }),
+
+      clearSentenceAudioCache: () =>
+        set((state) => {
+          Object.values(state.sentenceQueue.sentenceAudioCache).forEach((url) =>
+            URL.revokeObjectURL(url)
+          )
+          return {
+            sentenceQueue: { ...state.sentenceQueue, sentenceAudioCache: {} },
           }
         }),
 

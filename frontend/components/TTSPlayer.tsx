@@ -64,6 +64,7 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
   const evictSentenceAudio = useAppStore((s) => s.evictSentenceAudio);
   const registerAbortController = useAppStore((s) => s.registerAbortController);
   const abortAllPrefetches = useAppStore((s) => s.abortAllPrefetches);
+  const clearSentenceAudioCache = useAppStore((s) => s.clearSentenceAudioCache);
   const setCurrentSentenceIndex = useAppStore((s) => s.setCurrentSentenceIndex);
   const setCurrentSentenceWordTimings = useAppStore((s) => s.setCurrentSentenceWordTimings);
 
@@ -106,6 +107,12 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
         if (!res.ok) throw new Error(`Split failed: ${res.status}`);
         const data = await res.json();
         setSentences(data.sentences); // revokes previous blobs automatically
+
+        // Eagerly pre-synthesize the first 3 sentences so pressing Play is instant.
+        // Fire-and-forget — AbortController in synthesizeSentence handles cleanup on chapter change.
+        for (let i = 0; i < Math.min(3, data.sentences.length); i++) {
+          synthesizeSentence(i);
+        }
 
         // Restore resume position: prefer Supabase (logged-in users), fall back to localStorage
         const userId = useAppStore.getState().authState.supabaseUserId
@@ -153,6 +160,16 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
       useAppStore.getState().setSentences([]);
     };
   }, []);
+
+  // When speed or pitch changes, cached blobs were synthesized at old settings — evict them
+  // so the next play uses the new values. Abort in-flight requests too.
+  useEffect(() => {
+    abortAllPrefetches();
+    pendingRef.current.clear();
+    clearSentenceAudioCache();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ttsSettings.speed, ttsSettings.pitch, ttsSettings.preferredProvider,
+      ttsSettings.geminiVoice, ttsSettings.openaiVoice, ttsSettings.minimaxVoiceId]);
 
   const synthesizeSentence = useCallback(
     async (index: number): Promise<string | null> => {
@@ -243,14 +260,10 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
       const isFinished = index >= totalSentences - 1;
       syncProgress(chapterUrl, index, -1, isFinished);
 
-      // Prefetch the next two sentences (2-sentence lookahead reduces inter-sentence gaps)
-      const next = index + 1;
-      if (next < totalSentences) {
-        synthesizeSentence(next); // fire-and-forget; AbortController handles cancellation
-      }
-      const next2 = index + 2;
-      if (next2 < totalSentences) {
-        synthesizeSentence(next2); // fire-and-forget; second lookahead
+      // Prefetch the next 3 sentences (lookahead reduces inter-sentence gaps)
+      for (let ahead = 1; ahead <= 3; ahead++) {
+        const ni = index + ahead;
+        if (ni < totalSentences) synthesizeSentence(ni);
       }
 
       // Evict sentence from 2 before current (retain current-1, current, current+1)
