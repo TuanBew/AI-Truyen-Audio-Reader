@@ -36,7 +36,7 @@ interface SentenceSegment {
 
 function buildSentenceSegments(content: string, sentences: string[]): SentenceSegment[] {
   if (!sentences.length) return []
-  const paragraphs = content.split('\n').filter((p) => p.trim())
+  const paragraphs = content.replace(/\r\n/g, '\n').split('\n').filter((p) => p.trim())
   const result: SentenceSegment[] = []
   let sentIdx = 0
   let searchFrom = 0
