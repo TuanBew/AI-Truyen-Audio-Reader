@@ -430,9 +430,9 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
     [sentences.length, seekToSentence]
   );
 
-  const scrubberFill = sentences.length <= 1
+  const scrubberFill = Math.max(0, sentences.length <= 1
     ? 100
-    : (currentSentenceIndex / (sentences.length - 1)) * 100;
+    : (currentSentenceIndex / (sentences.length - 1)) * 100);
 
   const { providerUsed, fallbackUsed, isLoading } = playerState;
 
