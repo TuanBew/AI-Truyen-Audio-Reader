@@ -45,7 +45,6 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
     playerState,
     wordTimings,
     setPlaying,
-    setPlayerLoading,
     setAutoAdvance,
     setHighlightedWordIndex,
     markChapterFinished,
@@ -73,7 +72,6 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
   const audioRef = useRef<HTMLAudioElement | null>(null);
   // Deduplication map: index → in-flight promise, so concurrent calls share one request
   const pendingRef = useRef<Map<number, Promise<string | null>>>(new Map());
-  const [progress, setProgress] = useState(0);
   const [scrubberTooltip, setScrubberTooltip] = useState<{ x: number; label: string } | null>(null);
   const [counterEditing, setCounterEditing] = useState(false);
   const [counterInputVal, setCounterInputVal] = useState('');
@@ -307,7 +305,6 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
     audioRef.current?.pause();
     if (audioRef.current) audioRef.current.currentTime = 0;
     setPlaying(false);
-    setProgress(0);
     setHighlightedWordIndex(-1);
     setCurrentSentenceIndex(-1); // allow Play to restart from sentence 0
   };
@@ -317,9 +314,6 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
     if (!el || !el.duration) return;
 
     const currentMs = el.currentTime * 1000;
-
-    // Update progress bar
-    setProgress((el.currentTime / el.duration) * 100);
 
     // Update highlighted word from timing data
     const timings = wordTimings;
@@ -388,7 +382,6 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
 
     // Original handleEnded logic
     setPlaying(false);
-    setProgress(0);
     // Mark all words highlighted on complete playback
     if (wordTimings.length > 0) {
       setHighlightedWordIndex(wordTimings.length - 1);
@@ -409,14 +402,6 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
     chapterUrl,
     onEnded,
   ]);
-
-  const seekTo = (e: React.MouseEvent<HTMLDivElement>) => {
-    const el = audioRef.current;
-    if (!el || !el.duration) return;
-    const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    el.currentTime = (x / rect.width) * el.duration;
-  };
 
   const handleScrubberClick = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
