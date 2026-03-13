@@ -20,6 +20,7 @@ import os
 
 from services import tts_gemini, tts_openai, tts_minimax, tts_gtranslate
 from services.tts_xtts import synthesize as xtts_synthesize, XTTSTTSError, XTTSQuotaError
+from services.tts_edge import synthesize as edge_synthesize, EdgeTTSError
 from google.cloud import texttospeech as gctts
 
 router = APIRouter()
@@ -82,6 +83,7 @@ class TTSProvider(str, Enum):
     openai = "openai"
     minimax = "minimax"
     xtts = "xtts"
+    edge = "edge"
     gtranslate = "gtranslate"
 
 
@@ -152,6 +154,7 @@ def _run_provider_chain(
         TTSProvider.openai,
         TTSProvider.minimax,
         TTSProvider.xtts,
+        TTSProvider.edge,
         TTSProvider.gtranslate,
     ]
     start_idx = all_providers.index(body.preferred_provider)
@@ -201,6 +204,12 @@ def _run_provider_chain(
                 xtts_endpoint = body.xtts_endpoint or os.getenv("XTTS_ENDPOINT", "http://localhost:5002")
                 audio_bytes = xtts_synthesize(text=body.text, endpoint=xtts_endpoint)
 
+            elif provider == TTSProvider.edge:
+                audio_bytes = edge_synthesize(
+                    text=body.text,
+                    speed=body.speed,
+                )
+
             elif provider == TTSProvider.gtranslate:
                 audio_bytes = tts_gtranslate.synthesize_long(
                     text=body.text,
@@ -231,6 +240,7 @@ def _run_provider_chain(
             tts_minimax.MiniMaxTTSError,
             tts_gtranslate.GTTranslateTTSError,
             XTTSTTSError,
+            EdgeTTSError,
         ) as e:
             reason = f"{provider.value} error: {e}"
             logger.warning(reason)
