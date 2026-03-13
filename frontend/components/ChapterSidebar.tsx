@@ -99,6 +99,15 @@ export default function ChapterSidebar() {
         </button>
       </div>
 
+      {/* truyenplus.vn-only notice */}
+      <div className="mx-3 mb-2 rounded-lg px-3 py-2 flex items-start gap-2"
+        style={{ background: 'rgba(0,255,255,0.05)', border: '1px solid rgba(0,255,255,0.15)' }}>
+        <span className="text-xs mt-0.5 flex-shrink-0" style={{ color: '#00ffff' }}>ℹ</span>
+        <p className="text-xs leading-relaxed" style={{ color: 'rgba(0,255,255,0.6)' }}>
+          Chỉ hỗ trợ <span style={{ color: '#00ffff' }} className="font-medium">truyenplus.vn</span>
+        </p>
+      </div>
+
       {/* URL Input */}
       <div className="p-3 border-b border-gray-800">
         <div className="flex gap-2">
