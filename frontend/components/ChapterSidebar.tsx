@@ -91,11 +91,12 @@ export default function ChapterSidebar() {
       {/* Back to library */}
       <div className="px-3 pt-3 pb-1">
         <button
-          onClick={() => setView("home")}
-          className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-indigo-400 transition-colors group"
+          onClick={() => setView('home')}
+          className="flex items-center gap-1.5 text-xs transition-colors group"
+          style={{ color: '#6d6d9a' }}
         >
           <ChevronLeft size={14} className="group-hover:-translate-x-0.5 transition-transform" />
-          Thư viện
+          <span className="group-hover:text-violet-400 transition-colors">Thư viện</span>
         </button>
       </div>
 
@@ -109,20 +110,26 @@ export default function ChapterSidebar() {
       </div>
 
       {/* URL Input */}
-      <div className="p-3 border-b border-gray-800">
+      <div className="p-3" style={{ borderBottom: '1px solid rgba(124,58,237,0.2)' }}>
         <div className="flex gap-2">
           <input
             type="url"
             value={inputUrl}
             onChange={(e) => setInputUrl(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && fetchToc()}
+            onKeyDown={(e) => e.key === 'Enter' && fetchToc()}
             placeholder="https://truyenplus.vn/truyen/..."
-            className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-indigo-500 transition-colors"
+            className="flex-1 rounded-lg px-3 py-2 text-sm outline-none transition-all"
+            style={{
+              background: '#12122a',
+              border: '1px solid rgba(124,58,237,0.3)',
+              color: '#c7c7e0',
+            }}
           />
           <button
             onClick={fetchToc}
             disabled={loadingToc}
-            className="p-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-white"
+            className="p-2 rounded-lg transition-colors disabled:opacity-50"
+            style={{ background: '#7c3aed', color: 'white', boxShadow: '0 0 8px rgba(124,58,237,0.4)' }}
             title="Tải danh sách chương"
           >
             {loadingToc ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
@@ -131,67 +138,67 @@ export default function ChapterSidebar() {
       </div>
 
       {/* Novel title / status */}
-      <div className="px-3 py-2 border-b border-gray-800">
+      <div className="px-3 py-2" style={{ borderBottom: '1px solid rgba(124,58,237,0.2)' }}>
         {toc ? (
           <div>
-            <p className="text-xs text-indigo-400 font-semibold uppercase tracking-wider mb-0.5">
-              <BookOpen size={12} className="inline mr-1" />
-              Đang đọc
+            <p className="text-xs font-semibold uppercase tracking-wider mb-0.5 flex items-center gap-1"
+              style={{ color: '#a78bfa' }}>
+              <BookOpen size={11} /> Đang đọc
             </p>
-            <p className="text-sm font-medium text-white truncate" title={toc.novel_title}>
+            <p className="text-sm font-medium truncate" style={{ color: '#e2e8f0' }} title={toc.novel_title}>
               {toc.novel_title}
             </p>
-            <p className="text-xs text-gray-500">{toc.total_chapters} chương</p>
+            <p className="text-xs" style={{ color: '#6d6d9a' }}>{toc.total_chapters} chương</p>
           </div>
         ) : error ? (
-          <div className="flex items-center gap-2 text-red-400 text-xs">
+          <div className="flex items-center gap-2 text-xs" style={{ color: '#f87171' }}>
             <AlertCircle size={14} />
             <span className="truncate">{error}</span>
           </div>
         ) : (
-          <p className="text-xs text-gray-500 italic">Nhập URL truyện để bắt đầu…</p>
+          <p className="text-xs italic" style={{ color: '#4a4a7a' }}>Nhập URL truyện để bắt đầu…</p>
         )}
       </div>
 
       {/* Chapter list */}
       <div className="flex-1 overflow-y-auto">
         {loadingToc && (
-          <div className="flex items-center justify-center py-12 text-gray-500">
-            <Loader2 size={24} className="animate-spin mr-2" />
-            <span className="text-sm">Đang tải danh sách chương…</span>
+          <div className="flex items-center justify-center py-12" style={{ color: '#6d6d9a' }}>
+            <Loader2 size={20} className="animate-spin mr-2" />
+            <span className="text-sm">Đang tải…</span>
           </div>
         )}
         {toc && !loadingToc && (
           <ul className="py-1">
             {toc.chapters.map((ch: ChapterMeta, i: number) => {
-              const isActive = currentChapterUrl === ch.url;
+              const isActive = currentChapterUrl === ch.url
               return (
                 <li key={ch.url}>
                   <button
                     ref={isActive ? activeRef : undefined}
                     onClick={() => loadChapter(ch.url, ch.title)}
-                    className={`w-full text-left px-3 py-2.5 text-sm transition-colors flex items-start gap-2 group ${
-                      isActive
-                        ? "bg-indigo-600/20 text-indigo-300 border-l-2 border-indigo-500"
-                        : "text-gray-300 hover:bg-gray-800 hover:text-white border-l-2 border-transparent"
-                    }`}
+                    className="w-full text-left px-3 py-2.5 text-sm transition-colors flex items-start gap-2 group"
+                    style={{
+                      background: isActive ? 'rgba(124,58,237,0.15)' : 'transparent',
+                      borderLeft: `2px solid ${isActive ? '#a78bfa' : 'transparent'}`,
+                      color: isActive ? '#a78bfa' : '#8888b0',
+                    }}
                   >
-                    <span className="text-xs text-gray-600 mt-0.5 w-7 flex-shrink-0 font-mono group-hover:text-gray-400">
+                    <span className="text-xs mt-0.5 w-7 flex-shrink-0 font-mono"
+                      style={{ color: isActive ? '#7c3aed' : '#4a4a7a' }}>
                       {ch.number ?? i + 1}
                     </span>
                     <span className="truncate leading-snug flex-1">{ch.title}</span>
                     {isChapterFinished(ch.url) && (
-                      <span className="text-green-400 flex-shrink-0" title="Đã nghe">
-                        ✓
-                      </span>
+                      <span className="flex-shrink-0 text-xs" style={{ color: '#00ffff' }} title="Đã nghe">✓</span>
                     )}
                   </button>
                 </li>
-              );
+              )
             })}
           </ul>
         )}
       </div>
     </div>
-  );
+  )
 }
