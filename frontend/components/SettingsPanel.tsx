@@ -10,6 +10,7 @@ const PROVIDERS: { value: TTSProvider; label: string; description: string }[] = 
   { value: "openai", label: "OpenAI TTS", description: "Cần OPENAI_API_KEY" },
   { value: "minimax", label: "MiniMax", description: "Cần API key + Group ID" },
   { value: "xtts", label: "Local XTTS (Vietnamese)", description: "thivux/XTTS-v2 · Cần Coqui TTS server" },
+  { value: "edge", label: "Microsoft Edge TTS", description: "Miễn phí · Không cần API key" },
   { value: "gtranslate", label: "Google Translate (dự phòng)", description: "Không cần API key, chất lượng thấp" },
 ];
 
@@ -84,18 +85,20 @@ function GeminiCredentialsUploader() {
     <div className="flex flex-col gap-3">
       {/* Status badge */}
       {status?.configured ? (
-        <div className="flex items-start gap-2 bg-green-900/30 border border-green-700/50 rounded-lg px-3 py-2.5">
-          <CheckCircle2 size={16} className="text-green-400 mt-0.5 flex-shrink-0" />
+        <div className="flex items-start gap-2 rounded-lg px-3 py-2.5"
+          style={{ background: 'rgba(0,255,150,0.07)', border: '1px solid rgba(0,255,150,0.25)' }}>
+          <CheckCircle2 size={16} className="mt-0.5 flex-shrink-0" style={{ color: '#00ff96' }} />
           <div className="text-xs">
-            <p className="text-green-300 font-medium">Đã kết nối Google Cloud</p>
-            <p className="text-green-500 truncate">{status.client_email}</p>
-            <p className="text-green-600">Project: {status.project_id}</p>
+            <p className="font-medium" style={{ color: '#00ff96' }}>Đã kết nối Google Cloud</p>
+            <p style={{ color: 'rgba(0,255,150,0.6)' }} className="truncate">{status.client_email}</p>
+            <p style={{ color: 'rgba(0,255,150,0.4)' }}>Project: {status.project_id}</p>
           </div>
         </div>
       ) : (
-        <div className="flex items-center gap-2 bg-orange-900/20 border border-orange-700/40 rounded-lg px-3 py-2">
-          <XCircle size={15} className="text-orange-400 flex-shrink-0" />
-          <p className="text-xs text-orange-300">Chưa cấu hình — cần upload service account JSON</p>
+        <div className="flex items-center gap-2 rounded-lg px-3 py-2"
+          style={{ background: 'rgba(255,160,0,0.07)', border: '1px solid rgba(255,160,0,0.25)' }}>
+          <XCircle size={15} className="flex-shrink-0" style={{ color: '#ffaa33' }} />
+          <p className="text-xs" style={{ color: '#ffaa33' }}>Chưa cấu hình — cần upload service account JSON</p>
         </div>
       )}
 
@@ -105,11 +108,10 @@ function GeminiCredentialsUploader() {
         onDragLeave={() => setDragging(false)}
         onDrop={onDrop}
         onClick={() => fileInputRef.current?.click()}
-        className={`relative flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed p-6 cursor-pointer transition-all select-none
-          ${dragging
-            ? "border-indigo-400 bg-indigo-500/10 scale-[1.01]"
-            : "border-gray-600 hover:border-indigo-500 hover:bg-indigo-500/5"
-          } ${uploading ? "opacity-60 pointer-events-none" : ""}`}
+        className={`relative flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed p-6 cursor-pointer transition-all select-none ${uploading ? "opacity-60 pointer-events-none" : ""}`}
+        style={dragging
+          ? { borderColor: '#7c3aed', background: 'rgba(124,58,237,0.1)', transform: 'scale(1.01)' }
+          : { borderColor: 'rgba(124,58,237,0.3)', background: 'transparent' }}
       >
         <input
           ref={fileInputRef}
@@ -120,28 +122,29 @@ function GeminiCredentialsUploader() {
         />
         {uploading ? (
           <>
-            <div className="w-6 h-6 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin" />
-            <p className="text-xs text-gray-400">Đang tải lên…</p>
+            <div className="w-6 h-6 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: '#7c3aed', borderTopColor: 'transparent' }} />
+            <p className="text-xs" style={{ color: '#8888b0' }}>Đang tải lên…</p>
           </>
         ) : (
           <>
-            <div className="p-3 bg-gray-700/60 rounded-full">
+            <div className="p-3 rounded-full" style={{ background: 'rgba(124,58,237,0.15)' }}>
               {dragging
-                ? <FileJson size={22} className="text-indigo-400" />
-                : <UploadCloud size={22} className="text-gray-400" />
+                ? <FileJson size={22} style={{ color: '#a78bfa' }} />
+                : <UploadCloud size={22} style={{ color: '#6d6d9a' }} />
               }
             </div>
-            <p className="text-sm text-gray-300 font-medium">
+            <p className="text-sm font-medium" style={{ color: '#c7c7e0' }}>
               {dragging ? "Thả file vào đây" : "Kéo thả file JSON vào đây"}
             </p>
-            <p className="text-xs text-gray-500">hoặc click để chọn file</p>
-            <p className="text-xs text-gray-600 mt-1 font-mono">service_account.json</p>
+            <p className="text-xs" style={{ color: '#6d6d9a' }}>hoặc click để chọn file</p>
+            <p className="text-xs mt-1 font-mono" style={{ color: '#4a4a7a' }}>service_account.json</p>
           </>
         )}
       </div>
 
       {error && (
-        <div className="flex items-center gap-2 text-red-400 text-xs bg-red-900/20 border border-red-800/40 rounded-lg px-3 py-2">
+        <div className="flex items-center gap-2 text-xs rounded-lg px-3 py-2"
+          style={{ color: '#ff6b6b', background: 'rgba(255,50,50,0.07)', border: '1px solid rgba(255,50,50,0.25)' }}>
           <XCircle size={13} className="flex-shrink-0" />
           {error}
         </div>
@@ -150,15 +153,18 @@ function GeminiCredentialsUploader() {
       {/* Collapsible step-by-step guide */}
       <button
         onClick={() => setShowGuide((v) => !v)}
-        className="flex items-center justify-between w-full text-xs text-indigo-400 hover:text-indigo-300 transition-colors py-1"
+        className="flex items-center justify-between w-full text-xs py-1 transition-colors"
+        style={{ color: '#a78bfa' }}
       >
         <span className="font-medium">Hướng dẫn lấy service account JSON</span>
         {showGuide ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
       </button>
 
       {showGuide && (
-        <div className="rounded-xl bg-gray-800/60 border border-gray-700 px-4 py-4 text-xs text-gray-300 flex flex-col gap-3">
-          <div className="flex items-center gap-2 text-yellow-400 bg-yellow-900/20 border border-yellow-700/30 rounded-lg px-3 py-2">
+        <div className="rounded-xl px-4 py-4 text-xs flex flex-col gap-3"
+          style={{ background: 'rgba(124,58,237,0.07)', border: '1px solid rgba(124,58,237,0.2)', color: '#8888b0' }}>
+          <div className="flex items-center gap-2 rounded-lg px-3 py-2"
+            style={{ color: '#ffcc44', background: 'rgba(255,200,0,0.07)', border: '1px solid rgba(255,200,0,0.2)' }}>
             <span className="text-base">⚠️</span>
             <span>Cần bật <strong>Cloud Text-to-Speech API</strong> trên project của bạn. Miễn phí 1 triệu ký tự/tháng đầu.</span>
           </div>
@@ -173,7 +179,8 @@ function GeminiCredentialsUploader() {
             { n: 7, text: 'Upload file JSON vừa tải về vào ô trên ↑', href: null },
           ].map(({ n, text, href }) => (
             <div key={n} className="flex items-start gap-3">
-              <span className="flex-shrink-0 w-5 h-5 rounded-full bg-indigo-600 text-white text-xs flex items-center justify-center font-bold mt-0.5">
+              <span className="flex-shrink-0 w-5 h-5 rounded-full text-xs flex items-center justify-center font-bold mt-0.5"
+                style={{ background: '#7c3aed', color: '#fff' }}>
                 {n}
               </span>
               <span className="leading-relaxed flex-1">
@@ -183,7 +190,8 @@ function GeminiCredentialsUploader() {
                     href={href}
                     target="_blank"
                     rel="noreferrer"
-                    className="inline-flex items-center gap-0.5 ml-1.5 text-indigo-400 hover:underline"
+                    className="inline-flex items-center gap-0.5 ml-1.5 hover:underline"
+                    style={{ color: '#a78bfa' }}
                   >
                     Mở <ExternalLink size={11} />
                   </a>
@@ -208,16 +216,24 @@ function ProviderConfig({
   ttsSettings: { geminiVoice: string; openaiApiKey: string; openaiVoice: string; minimaxApiKey: string; minimaxGroupId: string; minimaxVoiceId: string; xttsEndpoint: string }
   sl: (field: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => void
 }) {
+  const inputStyle = {
+    background: '#12122a',
+    border: '1px solid rgba(124,58,237,0.3)',
+    color: '#c7c7e0',
+  };
+  const labelStyle = { color: '#6d6d9a' };
+
   switch (provider) {
     case 'gemini':
       return (
         <div className="mt-3 flex flex-col gap-3">
           <div>
-            <label className="text-xs text-gray-500 mb-1 block">Giọng</label>
+            <label className="text-xs mb-1 block" style={labelStyle}>Giọng</label>
             <select
               value={ttsSettings.geminiVoice}
               onChange={sl('geminiVoice')}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-indigo-500"
+              className="w-full rounded-lg px-3 py-2 text-sm focus:outline-none"
+              style={{ ...inputStyle, borderColor: 'rgba(124,58,237,0.3)' }}
             >
               {GEMINI_VOICES.map((v) => <option key={v} value={v}>{v}</option>)}
             </select>
@@ -229,21 +245,23 @@ function ProviderConfig({
       return (
         <div className="mt-3 flex flex-col gap-2">
           <div>
-            <label className="text-xs text-gray-500 mb-1 block">API Key</label>
+            <label className="text-xs mb-1 block" style={labelStyle}>API Key</label>
             <input
               type="password"
               value={ttsSettings.openaiApiKey}
               onChange={sl('openaiApiKey')}
               placeholder="sk-..."
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-xs text-gray-300 placeholder-gray-600 focus:outline-none focus:border-indigo-500"
+              className="w-full rounded-lg px-3 py-2 text-xs focus:outline-none"
+              style={{ ...inputStyle, '--placeholder-color': '#4a4a7a' } as React.CSSProperties}
             />
           </div>
           <div>
-            <label className="text-xs text-gray-500 mb-1 block">Giọng</label>
+            <label className="text-xs mb-1 block" style={labelStyle}>Giọng</label>
             <select
               value={ttsSettings.openaiVoice}
               onChange={sl('openaiVoice')}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-indigo-500"
+              className="w-full rounded-lg px-3 py-2 text-sm focus:outline-none"
+              style={inputStyle}
             >
               {OPENAI_VOICES.map((v) => <option key={v} value={v}>{v}</option>)}
             </select>
@@ -254,31 +272,34 @@ function ProviderConfig({
       return (
         <div className="mt-3 flex flex-col gap-2">
           <div>
-            <label className="text-xs text-gray-500 mb-1 block">API Key</label>
+            <label className="text-xs mb-1 block" style={labelStyle}>API Key</label>
             <input
               type="password"
               value={ttsSettings.minimaxApiKey}
               onChange={sl('minimaxApiKey')}
               placeholder="MiniMax API key"
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-xs text-gray-300 placeholder-gray-600 focus:outline-none focus:border-indigo-500"
+              className="w-full rounded-lg px-3 py-2 text-xs focus:outline-none"
+              style={inputStyle}
             />
           </div>
           <div>
-            <label className="text-xs text-gray-500 mb-1 block">Group ID</label>
+            <label className="text-xs mb-1 block" style={labelStyle}>Group ID</label>
             <input
               type="text"
               value={ttsSettings.minimaxGroupId}
               onChange={sl('minimaxGroupId')}
               placeholder="MiniMax Group ID"
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-xs text-gray-300 placeholder-gray-600 focus:outline-none focus:border-indigo-500"
+              className="w-full rounded-lg px-3 py-2 text-xs focus:outline-none"
+              style={inputStyle}
             />
           </div>
           <div>
-            <label className="text-xs text-gray-500 mb-1 block">Giọng</label>
+            <label className="text-xs mb-1 block" style={labelStyle}>Giọng</label>
             <select
               value={ttsSettings.minimaxVoiceId}
               onChange={sl('minimaxVoiceId')}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-indigo-500"
+              className="w-full rounded-lg px-3 py-2 text-sm focus:outline-none"
+              style={inputStyle}
             >
               {MINIMAX_VOICES.map((v) => <option key={v} value={v}>{v}</option>)}
             </select>
@@ -288,19 +309,32 @@ function ProviderConfig({
     case 'xtts':
       return (
         <div className="mt-3">
-          <label className="text-xs text-gray-500 mb-1 block">Endpoint URL</label>
+          <label className="text-xs mb-1 block" style={labelStyle}>Endpoint URL</label>
           <input
             type="url"
             value={ttsSettings.xttsEndpoint}
             onChange={sl('xttsEndpoint')}
             placeholder="http://localhost:5002"
-            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-xs text-gray-300 placeholder-gray-600 focus:outline-none focus:border-indigo-500"
+            className="w-full rounded-lg px-3 py-2 text-xs focus:outline-none"
+            style={inputStyle}
           />
+        </div>
+      )
+    case 'edge':
+      return (
+        <div className="mt-3 rounded-lg p-3"
+          style={{ background: 'rgba(0,255,255,0.05)', border: '1px solid rgba(0,255,255,0.2)' }}>
+          <p className="text-xs font-medium" style={{ color: '#00ffff' }}>
+            ✓ Edge TTS — <span style={{ color: 'rgba(0,255,255,0.7)' }}>vi-VN-NamMinhNeural</span>
+          </p>
+          <p className="text-xs mt-1" style={{ color: '#4a4a7a' }}>
+            Miễn phí · Không cần API key · Không giới hạn ký tự
+          </p>
         </div>
       )
     case 'gtranslate':
       return (
-        <p className="mt-2 text-xs text-gray-600 italic">
+        <p className="mt-2 text-xs italic" style={{ color: '#4a4a7a' }}>
           Không cần cấu hình — dùng làm dự phòng cuối cùng
         </p>
       )
@@ -323,11 +357,15 @@ export default function SettingsPanel() {
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex items-center justify-between px-5 py-4 border-b border-gray-700">
-        <h2 className="text-base font-semibold text-white">Cài đặt TTS</h2>
+      <div className="flex items-center justify-between px-5 py-4"
+        style={{ borderBottom: '1px solid rgba(124,58,237,0.15)' }}>
+        <h2 className="text-base font-semibold" style={{ color: '#a78bfa' }}>Cài đặt TTS</h2>
         <button
           onClick={toggleSettingsPanel}
-          className="p-1.5 rounded hover:bg-gray-700 text-gray-400 hover:text-white transition-colors"
+          className="p-1.5 rounded transition-colors"
+          style={{ color: '#6d6d9a' }}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#a78bfa'; (e.currentTarget as HTMLButtonElement).style.background = 'rgba(124,58,237,0.15)'; }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#6d6d9a'; (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; }}
         >
           <X size={18} />
         </button>
@@ -336,7 +374,7 @@ export default function SettingsPanel() {
       <div className="flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-6">
         {/* Provider */}
         <section>
-          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
+          <h3 className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: '#a78bfa' }}>
             Nhà cung cấp TTS
           </h3>
           <div className="flex flex-col gap-2">
@@ -345,11 +383,10 @@ export default function SettingsPanel() {
               return (
                 <div
                   key={p.value}
-                  className={`rounded-lg border p-3 transition-colors ${
-                    isActive
-                      ? 'border-indigo-500 bg-indigo-600/10'
-                      : 'border-gray-700 hover:border-gray-600'
-                  }`}
+                  className="rounded-lg border p-3 transition-colors"
+                  style={isActive
+                    ? { border: '1px solid #7c3aed', background: 'rgba(124,58,237,0.12)', boxShadow: '0 0 8px rgba(124,58,237,0.2)' }
+                    : { border: '1px solid rgba(124,58,237,0.15)', background: 'transparent' }}
                 >
                   <label className="flex items-start gap-3 cursor-pointer">
                     <input
@@ -358,11 +395,11 @@ export default function SettingsPanel() {
                       value={p.value}
                       checked={isActive}
                       onChange={() => updateTTSSettings({ preferredProvider: p.value })}
-                      className="mt-0.5 accent-indigo-500"
+                      className="mt-0.5 accent-violet-500"
                     />
                     <div>
-                      <p className="text-sm font-medium text-white">{p.label}</p>
-                      <p className="text-xs text-gray-500">{p.description}</p>
+                      <p className="text-sm font-medium" style={{ color: isActive ? '#c7c7e0' : '#8888b0' }}>{p.label}</p>
+                      <p className="text-xs" style={{ color: '#4a4a7a' }}>{p.description}</p>
                     </div>
                   </label>
                   {isActive && (
@@ -380,47 +417,48 @@ export default function SettingsPanel() {
 
         {/* Speed & Pitch */}
         <section>
-          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
-            Tốc độ & Cao độ
+          <h3 className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: '#a78bfa' }}>
+            Tốc độ &amp; Cao độ
           </h3>
           <div className="flex flex-col gap-4">
             <div>
               <div className="flex justify-between mb-1">
-                <label className="text-sm text-gray-300">Tốc độ đọc</label>
-                <span className="text-sm text-indigo-400 font-mono">{ttsSettings.speed.toFixed(1)}×</span>
+                <label className="text-sm" style={{ color: '#8888b0' }}>Tốc độ đọc</label>
+                <span className="text-sm font-mono" style={{ color: '#a78bfa' }}>{ttsSettings.speed.toFixed(1)}×</span>
               </div>
               <input
                 type="range" min="0.5" max="2.0" step="0.1"
                 value={ttsSettings.speed}
                 onChange={slNum("speed")}
-                className="w-full accent-indigo-500"
+                className="w-full accent-violet-500"
               />
               <div className="flex justify-between mt-0.5">
-                <span className="text-xs text-gray-600">0.5×</span>
-                <span className="text-xs text-gray-600">2.0×</span>
+                <span className="text-xs" style={{ color: '#4a4a7a' }}>0.5×</span>
+                <span className="text-xs" style={{ color: '#4a4a7a' }}>2.0×</span>
               </div>
             </div>
             <div>
               <div className="flex justify-between mb-1">
-                <label className="text-sm text-gray-300">Cao độ (Gemini)</label>
-                <span className="text-sm text-indigo-400 font-mono">{ttsSettings.pitch.toFixed(1)}</span>
+                <label className="text-sm" style={{ color: '#8888b0' }}>Cao độ (Gemini)</label>
+                <span className="text-sm font-mono" style={{ color: '#a78bfa' }}>{ttsSettings.pitch.toFixed(1)}</span>
               </div>
               <input
                 type="range" min="-10" max="10" step="0.5"
                 value={ttsSettings.pitch}
                 onChange={slNum("pitch")}
-                className="w-full accent-indigo-500"
+                className="w-full accent-violet-500"
               />
               <div className="flex justify-between mt-0.5">
-                <span className="text-xs text-gray-600">–10</span>
-                <span className="text-xs text-gray-600">+10</span>
+                <span className="text-xs" style={{ color: '#4a4a7a' }}>–10</span>
+                <span className="text-xs" style={{ color: '#4a4a7a' }}>+10</span>
               </div>
             </div>
           </div>
         </section>
       </div>
 
-      <div className="px-5 py-3 border-t border-gray-700 text-xs text-gray-600 text-center">
+      <div className="px-5 py-3 text-xs text-center"
+        style={{ borderTop: '1px solid rgba(124,58,237,0.15)', color: '#4a4a7a' }}>
         Cài đặt được lưu tự động vào localStorage
       </div>
     </div>
