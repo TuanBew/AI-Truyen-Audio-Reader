@@ -40,3 +40,6 @@ Thumbs.db
 # Tool-generated / local tooling
 .claude/
 .playwright-mcp/
+
+# Git worktrees
+.worktrees/
