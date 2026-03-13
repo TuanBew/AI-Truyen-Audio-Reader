@@ -75,6 +75,8 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
   const pendingRef = useRef<Map<number, Promise<string | null>>>(new Map());
   const [progress, setProgress] = useState(0);
   const [scrubberTooltip, setScrubberTooltip] = useState<{ x: number; label: string } | null>(null);
+  const [counterEditing, setCounterEditing] = useState(false);
+  const [counterInputVal, setCounterInputVal] = useState('');
   const markedFinishedRef = useRef(false);
   const [resumeFromIndex, setResumeFromIndex] = useState(0);
 
@@ -582,9 +584,46 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
 
         {/* Sentence counter */}
         {sentences.length > 0 && (
-          <span className="text-xs font-mono" style={{ color: '#6d6d9a' }}>
-            S.{Math.max(1, currentSentenceIndex + 1)}/{sentences.length}
-          </span>
+          counterEditing ? (
+            <input
+              type="number"
+              min={1}
+              max={sentences.length}
+              value={counterInputVal}
+              onChange={(e) => setCounterInputVal(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  const n = parseInt(counterInputVal, 10);
+                  if (!isNaN(n)) {
+                    seekToSentence(Math.max(0, Math.min(sentences.length - 1, n - 1)));
+                  }
+                  setCounterEditing(false);
+                } else if (e.key === 'Escape') {
+                  setCounterEditing(false);
+                }
+              }}
+              onBlur={() => setCounterEditing(false)}
+              autoFocus
+              className="w-16 text-xs font-mono text-center rounded px-1 py-0.5 focus:outline-none"
+              style={{
+                background: '#12122a',
+                border: '1px solid rgba(124,58,237,0.5)',
+                color: '#a78bfa',
+              }}
+            />
+          ) : (
+            <button
+              onClick={() => {
+                setCounterInputVal(String(Math.max(1, currentSentenceIndex + 1)));
+                setCounterEditing(true);
+              }}
+              className="text-xs font-mono transition-colors"
+              style={{ color: '#6d6d9a' }}
+              title="Nhảy đến câu..."
+            >
+              S.{Math.max(1, currentSentenceIndex + 1)}/{sentences.length}
+            </button>
+          )
         )}
 
         {/* Auto-advance toggle */}
