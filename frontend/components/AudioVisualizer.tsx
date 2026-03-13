@@ -8,9 +8,12 @@ interface Props {
 }
 
 const BAR_COUNT = 28
-const FFT_SIZE = 64        // yields 32 frequency bins
-const BIN_START = 2        // skip DC offset (0) and sub-bass (1)
-// Use bins 2–29 (28 bins in speech frequency range for Vietnamese)
+const FFT_SIZE = 64       // 32 frequency bins
+const BIN_START = 2       // skip DC + sub-bass
+
+// Neon color cycle per bar: violet → cyan → pink → repeat
+const NEON_COLORS = ['#a78bfa', '#00ffff', '#ff66ff']
+const IDLE_COLOR = 'rgba(124, 58, 237, 0.2)'
 
 export default function AudioVisualizer({ audioElement, isPlaying }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -19,33 +22,30 @@ export default function AudioVisualizer({ audioElement, isPlaying }: Props) {
   const sourceRef = useRef<MediaElementAudioSourceNode | null>(null)
   const contextRef = useRef<AudioContext | null>(null)
   const connectedElementRef = useRef<HTMLAudioElement | null>(null)
+
   useEffect(() => {
     if (!audioElement || !canvasRef.current) return
 
-    // Create AudioContext lazily (requires user gesture first)
     if (!contextRef.current) {
       contextRef.current = new AudioContext()
     }
     const ctx = contextRef.current
 
-    // If audioElement changed, disconnect the old source node first
     if (sourceRef.current && connectedElementRef.current !== audioElement) {
       sourceRef.current.disconnect()
       sourceRef.current = null
     }
 
-    // Connect new element (only once per element reference)
     if (!sourceRef.current) {
       try {
         sourceRef.current = ctx.createMediaElementSource(audioElement)
         connectedElementRef.current = audioElement
         analyserRef.current = ctx.createAnalyser()
         analyserRef.current.fftSize = FFT_SIZE
-        analyserRef.current.smoothingTimeConstant = 0.8
+        analyserRef.current.smoothingTimeConstant = 0.75
         sourceRef.current.connect(analyserRef.current)
         analyserRef.current.connect(ctx.destination)
       } catch (e) {
-        // HTMLMediaElement already connected — log and continue (idle animation only)
         console.warn('AudioVisualizer: could not connect audio element', e)
       }
     }
@@ -56,46 +56,53 @@ export default function AudioVisualizer({ audioElement, isPlaying }: Props) {
     const dataArray = new Uint8Array(analyser.frequencyBinCount)
     const canvas = canvasRef.current
     const canvasCtx = canvas.getContext('2d')!
-
     const W = canvas.width
     const H = canvas.height
-    const gap = 1
+    const gap = 2
     const barW = Math.floor(W / BAR_COUNT) - gap
 
     const draw = () => {
       analyser.getByteFrequencyData(dataArray)
-
       const avg = dataArray.slice(BIN_START, BIN_START + BAR_COUNT).reduce((s, v) => s + v, 0) / (BAR_COUNT * 255)
 
+      canvasCtx.clearRect(0, 0, W, H)
+
       if (!isPlaying || avg < 0.01) {
-        canvasCtx.clearRect(0, 0, W, H)
+        // Idle: 2-pixel flatline dots with idle color
         let x = 0
         for (let i = 0; i < BAR_COUNT; i++) {
-          canvasCtx.fillStyle = 'rgba(139, 92, 246, 0.25)'
-          canvasCtx.beginPath()
-          canvasCtx.roundRect(x, H - 3, barW, 3, 1)
-          canvasCtx.fill()
+          canvasCtx.fillStyle = IDLE_COLOR
+          canvasCtx.fillRect(x, H - 2, barW, 2)
           x += barW + gap
         }
         animFrameRef.current = requestAnimationFrame(draw)
         return
       }
 
-      canvasCtx.clearRect(0, 0, W, H)
+      // Active: pixel-art bars with neon glow
       let x = 0
       for (let i = 0; i < BAR_COUNT; i++) {
         const binIndex = BIN_START + i
         const value = dataArray[binIndex] / 255
-        const barHeight = Math.max(2, value * (H - 4))
+        const barHeight = Math.max(2, Math.round(value * (H - 4) / 2) * 2) // quantize to even pixels
         const y = H - barHeight
+        const color = NEON_COLORS[i % NEON_COLORS.length]
 
-        const gradient = canvasCtx.createLinearGradient(0, y, 0, H)
-        gradient.addColorStop(0, '#a78bfa')
-        gradient.addColorStop(1, '#7c3aed')
-        canvasCtx.fillStyle = gradient
-        canvasCtx.beginPath()
-        canvasCtx.roundRect(x, y, barW, barHeight, 2)
-        canvasCtx.fill()
+        // Glow
+        canvasCtx.shadowBlur = value > 0.5 ? 8 : 4
+        canvasCtx.shadowColor = color
+
+        // Pixel bar (no rounding — crisp pixel look)
+        canvasCtx.fillStyle = color
+        canvasCtx.fillRect(x, y, barW, barHeight)
+
+        // Bright cap pixel on top
+        canvasCtx.fillStyle = '#ffffff'
+        canvasCtx.globalAlpha = 0.6
+        canvasCtx.fillRect(x, y, barW, 2)
+        canvasCtx.globalAlpha = 1
+
+        canvasCtx.shadowBlur = 0
         x += barW + gap
       }
 
@@ -111,9 +118,10 @@ export default function AudioVisualizer({ audioElement, isPlaying }: Props) {
   return (
     <canvas
       ref={canvasRef}
-      width={BAR_COUNT * 9}
-      height={32}
+      width={BAR_COUNT * 11}
+      height={40}
       className="w-full"
+      style={{ imageRendering: 'pixelated' }}
       aria-hidden="true"
     />
   )
