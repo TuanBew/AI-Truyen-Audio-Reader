@@ -74,6 +74,34 @@ class ChapterResponse(BaseModel):
     source_url: str
 
 
+async def _resolve_old_chapter_url(client: httpx.AsyncClient, url: str) -> Optional[str]:
+    """
+    Resolve an old-format chapter URL to the new hashed URL via the listchap API.
+    Old format: /truyen/{slug}/chuong-{N}.html
+    New format: /{slug}/chuong-{N}-{hash}
+    Returns the new URL or None if it can't be resolved.
+    """
+    parsed = urlparse(url)
+    m = re.match(r"^(?:/truyen)?/([^/]+)/chuong-(\d+)(?:\.html)?$", parsed.path)
+    if not m:
+        return None
+    slug, chapter_number = m.group(1), int(m.group(2))
+    novel_url = f"https://{ALLOWED_DOMAIN}/{slug}/"
+    try:
+        novel_id, _ = await _get_novel_id(client, novel_url)
+    except Exception:
+        return None
+    page_num = max(1, (chapter_number - 1) // 100 + 1)
+    try:
+        chapters, _ = await _fetch_listchap_page(client, novel_id, page_num)
+        for ch in chapters:
+            if ch.number == chapter_number:
+                return ch.url
+    except Exception:
+        return None
+    return None
+
+
 @router.get("/chapter", response_model=ChapterResponse)
 @limiter.limit("30/minute")
 async def scrape_chapter(
@@ -89,7 +117,26 @@ async def scrape_chapter(
             resp = await client.get(url)
             resp.raise_for_status()
         except httpx.HTTPStatusError as e:
-            raise HTTPException(status_code=e.response.status_code, detail=str(e))
+            # Old-format URLs now return 500 — transparently resolve to new hashed URL
+            if e.response.status_code == 500:
+                new_url = await _resolve_old_chapter_url(client, url)
+                if new_url and new_url != url:
+                    try:
+                        resp = await client.get(new_url)
+                        resp.raise_for_status()
+                        url = new_url
+                    except Exception:
+                        raise HTTPException(
+                            status_code=422,
+                            detail="URL chương đã cũ và không thể tự động cập nhật. Vui lòng xóa và thêm lại truyện.",
+                        )
+                else:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="URL chương đã cũ (định dạng truyenplus.vn đã thay đổi). Vui lòng xóa và thêm lại truyện.",
+                    )
+            else:
+                raise HTTPException(status_code=e.response.status_code, detail=str(e))
         except httpx.RequestError as e:
             raise HTTPException(status_code=502, detail=f"Network error: {e}")
 
@@ -332,13 +379,19 @@ async def scrape_toc(
     """
     _validate_domain(url)
 
-    # Normalise to novel homepage (strip chapter path if given a chapter URL)
+    # Normalise to novel homepage (strip /truyen/ prefix and chapter path)
     parsed = urlparse(url)
     path_parts = [p for p in parsed.path.strip("/").split("/") if p]
+    # Strip leading /truyen/ prefix if present (old URL format)
+    if path_parts and path_parts[0] == "truyen":
+        path_parts = path_parts[1:]
+    # Strip chapter segment if given a chapter URL
     if len(path_parts) >= 2 and "chuong" in path_parts[-1]:
         novel_path = "/" + path_parts[0] + "/"
+    elif len(path_parts) >= 1:
+        novel_path = "/" + path_parts[0] + "/"
     else:
-        novel_path = parsed.path
+        novel_path = "/"
     novel_url = f"https://{ALLOWED_DOMAIN}{novel_path}"
 
     async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True, timeout=25) as client:
