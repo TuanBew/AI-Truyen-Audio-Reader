@@ -33,7 +33,15 @@ export default function NovelCard({ novel, onOpen, onDelete }: NovelCardProps) {
   ) : 0;
 
   return (
-    <div className="group relative rounded-2xl overflow-hidden bg-gray-900 border border-gray-800 hover:border-indigo-500/50 transition-all duration-300 hover:shadow-2xl hover:shadow-indigo-500/10 hover:-translate-y-1 cursor-pointer">
+    <div
+      className="group relative rounded-2xl overflow-hidden transition-all duration-300 hover:-translate-y-1 cursor-pointer"
+      style={{
+        background: '#12122a',
+        border: '1px solid rgba(124,58,237,0.3)',
+      }}
+      onMouseEnter={e => (e.currentTarget.style.boxShadow = '0 0 20px rgba(124,58,237,0.2)')}
+      onMouseLeave={e => (e.currentTarget.style.boxShadow = 'none')}
+    >
       {/* Cover / gradient area */}
       <div
         className={`relative h-48 bg-gradient-to-br ${gradient} flex items-end p-4`}
@@ -61,29 +69,32 @@ export default function NovelCard({ novel, onOpen, onDelete }: NovelCardProps) {
 
       {/* Info */}
       <div className="p-4" onClick={() => onOpen(novel)}>
-        <h3 className="font-semibold text-gray-100 text-sm leading-snug line-clamp-2 mb-1 group-hover:text-white transition-colors">
+        <h3
+          className="font-semibold text-sm leading-snug line-clamp-2 mb-1 transition-colors"
+          style={{ color: '#e2e8f0' }}
+        >
           {novel.title}
         </h3>
 
         {novel.lastChapterTitle ? (
-          <p className="text-xs text-indigo-400 truncate mb-3">
+          <p className="text-xs truncate mb-3" style={{ color: '#00ffff' }}>
             Đang đọc: {novel.lastChapterTitle}
           </p>
         ) : (
-          <p className="text-xs text-gray-600 mb-3">Chưa bắt đầu đọc</p>
+          <p className="text-xs mb-3" style={{ color: '#6d6d9a' }}>Chưa bắt đầu đọc</p>
         )}
 
         {/* Progress bar */}
         {novel.lastChapterUrl && (
           <div className="mb-3">
-            <div className="flex justify-between text-xs text-gray-600 mb-1">
+            <div className="flex justify-between text-xs mb-1" style={{ color: '#6d6d9a' }}>
               <span>Tiến độ</span>
               <span>{Math.round(progress)}%</span>
             </div>
-            <div className="h-1 bg-gray-800 rounded-full overflow-hidden">
+            <div className="h-1 rounded-full overflow-hidden" style={{ background: 'rgba(124,58,237,0.15)' }}>
               <div
-                className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 rounded-full transition-all duration-500"
-                style={{ width: `${progress}%` }}
+                className="h-full rounded-full transition-all duration-500"
+                style={{ width: `${progress}%`, background: 'linear-gradient(to right, #7c3aed, #a78bfa)' }}
               />
             </div>
           </div>
@@ -93,7 +104,10 @@ export default function NovelCard({ novel, onOpen, onDelete }: NovelCardProps) {
       {/* Delete button (appears on hover) */}
       <button
         onClick={(e) => { e.stopPropagation(); onDelete(novel.id); }}
-        className="absolute top-2 right-2 p-1.5 rounded-lg bg-black/50 text-gray-400 hover:text-red-400 hover:bg-red-900/50 transition-all duration-200 opacity-0 group-hover:opacity-100 backdrop-blur-sm"
+        className="absolute top-2 right-2 p-1.5 rounded-lg bg-black/50 transition-all duration-200 opacity-0 group-hover:opacity-100 backdrop-blur-sm"
+        style={{ color: '#6d6d9a' }}
+        onMouseEnter={e => (e.currentTarget.style.color = '#ff66ff')}
+        onMouseLeave={e => (e.currentTarget.style.color = '#6d6d9a')}
         title="Xóa khỏi thư viện"
       >
         <Trash2 size={14} />
