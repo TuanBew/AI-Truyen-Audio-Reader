@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useEffect, useCallback } from "react";
+import { useRef, useEffect, useCallback, useMemo, Fragment } from "react";
 import { Loader2, ChevronLeft, ChevronRight, BookOpen } from "lucide-react";
 import { toast } from "react-toastify";
 import { useAppStore } from "@/lib/store";
@@ -28,6 +28,46 @@ function splitToWords(content: string) {
   return result;
 }
 
+interface SentenceSegment {
+  text: string
+  index: number
+  paraBreak: boolean
+}
+
+function buildSentenceSegments(content: string, sentences: string[]): SentenceSegment[] {
+  if (!sentences.length) return []
+  const paragraphs = content.split('\n').filter((p) => p.trim())
+  const result: SentenceSegment[] = []
+  let sentIdx = 0
+  let searchFrom = 0
+
+  for (const para of paragraphs) {
+    const paraStart = content.indexOf(para, searchFrom)
+    if (paraStart === -1) continue
+    let isFirstInPara = true
+    let paraOffset = paraStart
+
+    while (sentIdx < sentences.length) {
+      const sent = sentences[sentIdx].trim()
+      const pos = content.indexOf(sent, paraOffset)
+      if (pos === -1 || pos > paraStart + para.length) break
+      result.push({ text: sentences[sentIdx], index: sentIdx, paraBreak: isFirstInPara })
+      paraOffset = pos + sent.length
+      searchFrom = paraOffset
+      sentIdx++
+      isFirstInPara = false
+    }
+  }
+
+  // Append unmatched sentences (handles edge cases)
+  while (sentIdx < sentences.length) {
+    result.push({ text: sentences[sentIdx], index: sentIdx, paraBreak: false })
+    sentIdx++
+  }
+
+  return result
+}
+
 export default function ReaderPanel() {
   const {
     currentChapter,
@@ -47,6 +87,18 @@ export default function ReaderPanel() {
 
   const { highlightedWordIndex, autoAdvance } = playerState;
 
+  const { sentences, currentSentenceIndex: activeSentenceIdx } = useAppStore(
+    (s) => s.sentenceQueue
+  )
+
+  const sentenceSegments = useMemo(
+    () =>
+      currentChapter?.content
+        ? buildSentenceSegments(currentChapter.content, sentences)
+        : [],
+    [currentChapter?.content, sentences]
+  )
+
   const contentRef = useRef<HTMLDivElement>(null);
   const highlightedRef = useRef<HTMLSpanElement | null>(null);
 
@@ -64,6 +116,13 @@ export default function ReaderPanel() {
       behavior: "smooth",
     });
   }, [highlightedWordIndex]);
+
+  // Auto-scroll to active sentence
+  useEffect(() => {
+    if (activeSentenceIdx < 0) return
+    document.getElementById(`sent-${activeSentenceIdx}`)
+      ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [activeSentenceIdx])
 
   // Auto-resume: if a chapter was active before reload, silently re-fetch it
   useEffect(() => {
@@ -176,33 +235,50 @@ export default function ReaderPanel() {
         />
       </div>
 
-      {/* Chapter text with word-level highlighting */}
+      {/* Chapter text — sentence-level when TTS loaded, word-level fallback */}
       <div
         ref={contentRef}
         className="flex-1 overflow-y-auto px-8 py-6 w-full"
       >
-        <div className="mx-auto max-w-[72ch] text-[1.25rem] leading-[1.85] text-gray-100 [&>p]:mb-[1.5em] font-sans tracking-wide">
-          <p>
-            {wordTokens.map((token) => {
-              const isCurrent = token.globalIndex === highlightedWordIndex;
-              return (
-                <span key={token.globalIndex}>
-                  {/* Paragraph break — render space + newline equivalent */}
-                  {token.paraBreakBefore && <br className="mb-3 block" />}
-                  <span
-                    ref={isCurrent ? highlightedRef : undefined}
-                    className={`transition-colors duration-100 ${
-                      isCurrent
-                        ? "text-amber-300 underline decoration-amber-400/50 decoration-2"
-                        : ""
-                    }`}
-                  >
-                    {token.word}
-                  </span>{" "}
+        <div className="mx-auto max-w-[72ch] text-[1.25rem] leading-[1.85] text-gray-100 font-sans tracking-wide">
+          {sentenceSegments.length > 0 ? (
+            sentenceSegments.map((seg) => (
+              <Fragment key={seg.index}>
+                {seg.paraBreak && seg.index > 0 && <div className="mt-[1em]" />}
+                <span
+                  id={`sent-${seg.index}`}
+                  className={
+                    seg.index === activeSentenceIdx
+                      ? 'bg-amber-400/20 text-amber-100 rounded px-0.5 transition-colors duration-200'
+                      : 'transition-colors duration-200'
+                  }
+                >
+                  {seg.text}{' '}
                 </span>
-              );
-            })}
-          </p>
+              </Fragment>
+            ))
+          ) : (
+            <p>
+              {wordTokens.map((token) => {
+                const isCurrent = token.globalIndex === highlightedWordIndex;
+                return (
+                  <span key={token.globalIndex}>
+                    {token.paraBreakBefore && <br className="mb-3 block" />}
+                    <span
+                      ref={isCurrent ? highlightedRef : undefined}
+                      className={`transition-colors duration-100 ${
+                        isCurrent
+                          ? "text-amber-300 underline decoration-amber-400/50 decoration-2"
+                          : ""
+                      }`}
+                    >
+                      {token.word}
+                    </span>{" "}
+                  </span>
+                );
+              })}
+            </p>
+          )}
         </div>
       </div>
 
