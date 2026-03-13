@@ -19,9 +19,6 @@ export default function AudioVisualizer({ audioElement, isPlaying }: Props) {
   const sourceRef = useRef<MediaElementAudioSourceNode | null>(null)
   const contextRef = useRef<AudioContext | null>(null)
   const connectedElementRef = useRef<HTMLAudioElement | null>(null)
-  // Use a ref for idleTime to prevent unbounded float accumulation across re-renders
-  const idleTimeRef = useRef(0)
-
   useEffect(() => {
     if (!audioElement || !canvasRef.current) return
 
@@ -60,37 +57,49 @@ export default function AudioVisualizer({ audioElement, isPlaying }: Props) {
     const canvas = canvasRef.current
     const canvasCtx = canvas.getContext('2d')!
 
+    const W = canvas.width
+    const H = canvas.height
+    const gap = 1
+    const barW = Math.floor(W / BAR_COUNT) - gap
+
     const draw = () => {
-      animFrameRef.current = requestAnimationFrame(draw)
       analyser.getByteFrequencyData(dataArray)
 
-      const { width, height } = canvas
-      canvasCtx.clearRect(0, 0, width, height)
-      const barWidth = Math.floor(width / BAR_COUNT) - 1
+      const avg = dataArray.slice(BIN_START, BIN_START + BAR_COUNT).reduce((s, v) => s + v, 0) / (BAR_COUNT * 255)
 
+      if (!isPlaying || avg < 0.01) {
+        canvasCtx.clearRect(0, 0, W, H)
+        let x = 0
+        for (let i = 0; i < BAR_COUNT; i++) {
+          canvasCtx.fillStyle = 'rgba(139, 92, 246, 0.25)'
+          canvasCtx.beginPath()
+          canvasCtx.roundRect(x, H - 3, barW, 3, 1)
+          canvasCtx.fill()
+          x += barW + gap
+        }
+        animFrameRef.current = requestAnimationFrame(draw)
+        return
+      }
+
+      canvasCtx.clearRect(0, 0, W, H)
+      let x = 0
       for (let i = 0; i < BAR_COUNT; i++) {
         const binIndex = BIN_START + i
         const value = dataArray[binIndex] / 255
+        const barHeight = Math.max(2, value * (H - 4))
+        const y = H - barHeight
 
-        let displayValue = value
-        if (!isPlaying || value < 0.01) {
-          // Wrap idleTime to prevent float precision loss over long sessions
-          idleTimeRef.current = (idleTimeRef.current + 0.04) % (Math.PI * 2)
-          displayValue = 0.15 + 0.07 * Math.sin(idleTimeRef.current + i * 0.4)
-        }
-
-        const barHeight = Math.max(2, displayValue * (height - 4))
-        const x = i * (barWidth + 1)
-        const y = height - barHeight
-
-        const gradient = canvasCtx.createLinearGradient(0, y, 0, height)
+        const gradient = canvasCtx.createLinearGradient(0, y, 0, H)
         gradient.addColorStop(0, '#a78bfa')
         gradient.addColorStop(1, '#7c3aed')
         canvasCtx.fillStyle = gradient
         canvasCtx.beginPath()
-        canvasCtx.roundRect(x, y, barWidth, barHeight, 2)
+        canvasCtx.roundRect(x, y, barW, barHeight, 2)
         canvasCtx.fill()
+        x += barW + gap
       }
+
+      animFrameRef.current = requestAnimationFrame(draw)
     }
 
     if (ctx.state === 'suspended') ctx.resume()
