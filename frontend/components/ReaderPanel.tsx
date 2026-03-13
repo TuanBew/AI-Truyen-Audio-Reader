@@ -225,7 +225,7 @@ export default function ReaderPanel() {
           chapterUrl={currentChapter.source_url}
           onEnded={() => {
             if (autoAdvance && currentChapter.next_url) {
-              navigateTo(currentChapter.next_url);
+              setTimeout(() => navigateTo(currentChapter.next_url!), 800)
             }
           }}
         />
