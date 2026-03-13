@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Settings, Headphones } from "lucide-react";
 import { useAuth } from "@/lib/hooks/useAuth";
 import { useAppStore } from "@/lib/store";
@@ -10,10 +10,18 @@ import SettingsPanel from "./SettingsPanel";
 import HomePage from "./HomePage";
 import AuthModal from "./AuthModal";
 import UserMenu from "./UserMenu";
+import ResizableDivider from "./ResizableDivider";
 
 export default function MainLayout() {
   const { view, setView, settingsPanelOpen, toggleSettingsPanel } = useAppStore();
-  const [sidebarWidth] = useState(320);
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    if (typeof window === 'undefined') return 260
+    return parseInt(localStorage.getItem('sidebar-width') ?? '260', 10)
+  })
+
+  useEffect(() => {
+    localStorage.setItem('sidebar-width', String(sidebarWidth))
+  }, [sidebarWidth])
   useAuth()  // Mount Supabase session listener at root
   const authState = useAppStore((s) => s.authState)
   const [authModalOpen, setAuthModalOpen] = useState(false)
@@ -31,9 +39,12 @@ export default function MainLayout() {
       >
         <ChapterSidebar />
       </aside>
+      <ResizableDivider
+        onResize={(dx) => setSidebarWidth((w) => Math.min(420, Math.max(160, w + dx)))}
+      />
 
       {/* ── Main content area ────────────────────────────── */}
-      <main className="flex-1 overflow-hidden flex flex-col relative">
+      <main className="flex-1 min-w-0 overflow-hidden flex flex-col relative">
         {/* Top bar */}
         <header className="h-12 flex items-center justify-between px-4 border-b border-gray-800 bg-gray-900 flex-shrink-0">
           {/* Clickable logo → home */}
