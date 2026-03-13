@@ -84,7 +84,7 @@ export default function AudioVisualizer({ audioElement, isPlaying }: Props) {
       for (let i = 0; i < BAR_COUNT; i++) {
         const binIndex = BIN_START + i
         const value = dataArray[binIndex] / 255
-        const barHeight = Math.max(2, Math.round(value * (H - 4) / 2) * 2) // quantize to even pixels
+        const barHeight = Math.max(2, Math.min(H - 2, Math.round(value * (H - 2) * 1.8)))
         const y = H - barHeight
         const color = NEON_COLORS[i % NEON_COLORS.length]
 
