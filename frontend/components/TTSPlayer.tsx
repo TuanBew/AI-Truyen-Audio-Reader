@@ -72,6 +72,8 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
   const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  // Deduplication map: index → in-flight promise, so concurrent calls share one request
+  const pendingRef = useRef<Map<number, Promise<string | null>>>(new Map());
   const [audioBlobUrl, setAudioBlobUrl] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
   const markedFinishedRef = useRef(false);
@@ -154,6 +156,7 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
       const cache = useAppStore.getState().sentenceQueue.sentenceAudioCache;
       Object.values(cache).forEach((url) => URL.revokeObjectURL(url));
       useAppStore.getState().abortAllPrefetches();
+      pendingRef.current.clear();
       useAppStore.getState().setSentences([]);
     };
   }, []);
@@ -163,60 +166,70 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
       const state = useAppStore.getState().sentenceQueue;
       if (state.sentenceAudioCache[index]) return state.sentenceAudioCache[index];
 
+      // Return existing in-flight promise instead of launching a duplicate request
+      const existing = pendingRef.current.get(index);
+      if (existing) return existing;
+
       const controller = new AbortController();
       registerAbortController(index, controller);
 
-      try {
-        const res = await fetch(`${apiUrl}/api/tts/synthesize-with-timing`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(ttsSettings.openaiApiKey
-              ? { "X-OpenAI-Key": ttsSettings.openaiApiKey }
-              : {}),
-            ...(ttsSettings.minimaxApiKey
-              ? { "X-MiniMax-Key": ttsSettings.minimaxApiKey }
-              : {}),
-            ...(ttsSettings.minimaxGroupId
-              ? { "X-MiniMax-Group-Id": ttsSettings.minimaxGroupId }
-              : {}),
-          },
-          body: JSON.stringify({
-            text: useAppStore.getState().sentenceQueue.sentences[index],
-            preferred_provider: ttsSettings.preferredProvider,
-            audio_format: ttsSettings.audioFormat,
-            gemini_voice: ttsSettings.geminiVoice,
-            gemini_language: ttsSettings.geminiLanguage,
-            openai_voice: ttsSettings.openaiVoice,
-            openai_model: ttsSettings.openaiModel,
-            minimax_voice_id: ttsSettings.minimaxVoiceId,
-            speed: ttsSettings.speed,
-            pitch: ttsSettings.pitch,
-          }),
-          signal: controller.signal,
-        });
-        if (!res.ok) throw new Error(`TTS failed: ${res.status}`);
-        const data = await res.json();
+      const promise = (async () => {
+        try {
+          const res = await fetch(`${apiUrl}/api/tts/synthesize-with-timing`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(ttsSettings.openaiApiKey
+                ? { "X-OpenAI-Key": ttsSettings.openaiApiKey }
+                : {}),
+              ...(ttsSettings.minimaxApiKey
+                ? { "X-MiniMax-Key": ttsSettings.minimaxApiKey }
+                : {}),
+              ...(ttsSettings.minimaxGroupId
+                ? { "X-MiniMax-Group-Id": ttsSettings.minimaxGroupId }
+                : {}),
+            },
+            body: JSON.stringify({
+              text: useAppStore.getState().sentenceQueue.sentences[index],
+              preferred_provider: ttsSettings.preferredProvider,
+              audio_format: ttsSettings.audioFormat,
+              gemini_voice: ttsSettings.geminiVoice,
+              gemini_language: ttsSettings.geminiLanguage,
+              openai_voice: ttsSettings.openaiVoice,
+              openai_model: ttsSettings.openaiModel,
+              minimax_voice_id: ttsSettings.minimaxVoiceId,
+              speed: ttsSettings.speed,
+              pitch: ttsSettings.pitch,
+            }),
+            signal: controller.signal,
+          });
+          if (!res.ok) throw new Error(`TTS failed: ${res.status}`);
+          const data = await res.json();
 
-        // data.audio_b64, data.word_timings (matching existing synthesize response shape)
-        const audioB64 = data.audio_b64 ?? data.audio_base64;
-        const audioBytes = Uint8Array.from(atob(audioB64), (c) => c.charCodeAt(0));
-        const mimeType = ttsSettings.audioFormat === "wav" ? "audio/wav" : "audio/mpeg";
-        const blob = new Blob([audioBytes], { type: mimeType });
-        const blobUrl = URL.createObjectURL(blob);
-        cacheSentenceAudio(index, blobUrl);
+          const audioB64 = data.audio_b64 ?? data.audio_base64;
+          const audioBytes = Uint8Array.from(atob(audioB64), (c) => c.charCodeAt(0));
+          const mimeType = ttsSettings.audioFormat === "wav" ? "audio/wav" : "audio/mpeg";
+          const blob = new Blob([audioBytes], { type: mimeType });
+          const blobUrl = URL.createObjectURL(blob);
+          cacheSentenceAudio(index, blobUrl);
 
-        if (data.word_timings) {
-          setCurrentSentenceWordTimings(data.word_timings);
+          if (data.word_timings) {
+            setCurrentSentenceWordTimings(data.word_timings);
+          }
+          return blobUrl;
+        } catch (err: unknown) {
+          if (err instanceof DOMException && err.name === "AbortError") {
+            return null; // Seek cancelled this prefetch — silently discard
+          }
+          console.error(`Sentence ${index} synthesis failed:`, err);
+          return null;
+        } finally {
+          pendingRef.current.delete(index);
         }
-        return blobUrl;
-      } catch (err: unknown) {
-        if (err instanceof DOMException && err.name === "AbortError") {
-          return null; // Seek cancelled this prefetch — silently discard
-        }
-        console.error(`Sentence ${index} synthesis failed:`, err);
-        return null;
-      }
+      })();
+
+      pendingRef.current.set(index, promise);
+      return promise;
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [apiUrl, ttsSettings, registerAbortController, cacheSentenceAudio, setCurrentSentenceWordTimings]
@@ -257,6 +270,7 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
   const seekToSentence = useCallback(
     async (index: number) => {
       abortAllPrefetches(); // cancel all in-flight fetches immediately
+      pendingRef.current.clear(); // discard stale in-flight promises
       await playSentence(index);
     },
     [abortAllPrefetches, playSentence]
