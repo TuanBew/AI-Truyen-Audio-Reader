@@ -121,6 +121,7 @@ export const useAppStore = create<AppStore>()(
       currentChapter: null,
       currentChapterUrl: null,
       currentSentenceIndex: -1,
+      chapterProgress: {},
       loadingToc: false,
       loadingChapter: false,
       wordTimings: [],
@@ -331,6 +332,10 @@ export const useAppStore = create<AppStore>()(
       setCurrentSentenceIndex: (index: number) =>
         set((state) => ({
           currentSentenceIndex: index,  // persisted top-level
+          // Also persist per-chapter so we can restore when returning to this chapter
+          chapterProgress: state.currentChapterUrl && index >= 0
+            ? { ...state.chapterProgress, [state.currentChapterUrl]: index }
+            : state.chapterProgress,
           sentenceQueue: { ...state.sentenceQueue, currentSentenceIndex: index },
         })),
 
@@ -397,8 +402,9 @@ export const useAppStore = create<AppStore>()(
           savedFiles: [],
           isRecording: false,
         },
-        currentChapterUrl: state.currentChapterUrl,       // ADD
-        currentSentenceIndex: state.currentSentenceIndex, // ADD
+        currentChapterUrl: state.currentChapterUrl,
+        currentSentenceIndex: state.currentSentenceIndex,
+        chapterProgress: state.chapterProgress,
         ambientState: {
           currentTrackId: state.ambientState.currentTrackId,
           volume: state.ambientState.volume,

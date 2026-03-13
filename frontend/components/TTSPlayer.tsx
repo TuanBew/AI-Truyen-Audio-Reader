@@ -124,17 +124,11 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
           }
         }
 
-        // Guest fallback: use persisted store index (only if it belongs to this chapter)
+        // Guest fallback: look up per-chapter progress map
         if (restoredIndex === 0) {
-          const state = useAppStore.getState()
-          const persistedIndex = state.currentSentenceIndex
-          const persistedUrl = state.currentChapterUrl
-          if (
-            persistedIndex > 0 &&
-            persistedIndex < data.sentences.length &&
-            persistedUrl === currentChapter?.source_url
-          ) {
-            restoredIndex = persistedIndex
+          const savedIndex = useAppStore.getState().chapterProgress[currentChapter.source_url]
+          if (savedIndex > 0 && savedIndex < data.sentences.length) {
+            restoredIndex = savedIndex
           }
         }
 

@@ -1,8 +1,11 @@
 'use client'
 
-import { Plus, Headphones, BookOpen, Zap } from 'lucide-react'
+import { useState } from 'react'
+import { Plus, Headphones, BookOpen, Zap, LogIn, LogOut } from 'lucide-react'
 import { useAppStore } from '@/lib/store'
+import { supabase } from '@/lib/supabase'
 import NovelCard from './NovelCard'
+import AuthModal from './AuthModal'
 import type { SavedNovel } from '@/lib/types'
 
 // Neon particle positions — deterministic to avoid hydration mismatch
@@ -18,6 +21,8 @@ const PARTICLES = [
 
 export default function HomePage() {
   const { savedNovels, removeNovel, openNovel, setView } = useAppStore()
+  const authState = useAppStore((s) => s.authState)
+  const [authModalOpen, setAuthModalOpen] = useState(false)
 
   const handleOpen = (novel: SavedNovel) => openNovel(novel)
   const handleDelete = (id: string) => removeNovel(id)
@@ -72,14 +77,40 @@ export default function HomePage() {
             </div>
           </div>
 
-          <button
-            onClick={handleAddNew}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl text-white text-sm font-medium transition-all hover:-translate-y-0.5 active:translate-y-0"
-            style={{ background: '#7c3aed', boxShadow: '0 0 16px rgba(124,58,237,0.4)' }}
-          >
-            <Plus size={16} />
-            Thêm truyện
-          </button>
+          <div className="flex items-center gap-2">
+            {authState.supabaseUserId ? (
+              <button
+                onClick={() => supabase.auth.signOut()}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-xl text-sm font-medium transition-all"
+                style={{
+                  background: 'rgba(124,58,237,0.08)',
+                  border: '1px solid rgba(124,58,237,0.35)',
+                  color: '#a78bfa',
+                }}
+                title={`Đăng xuất (${authState.supabaseEmail})`}
+              >
+                <LogOut size={14} />
+                <span className="hidden sm:inline truncate max-w-[120px]">{authState.supabaseEmail}</span>
+              </button>
+            ) : (
+              <button
+                onClick={() => setAuthModalOpen(true)}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-xl text-sm font-medium text-white transition-all hover:-translate-y-0.5"
+                style={{ background: 'rgba(124,58,237,0.6)', border: '1px solid rgba(124,58,237,0.4)' }}
+              >
+                <LogIn size={14} />
+                Đăng nhập
+              </button>
+            )}
+            <button
+              onClick={handleAddNew}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl text-white text-sm font-medium transition-all hover:-translate-y-0.5 active:translate-y-0"
+              style={{ background: '#7c3aed', boxShadow: '0 0 16px rgba(124,58,237,0.4)' }}
+            >
+              <Plus size={16} />
+              Thêm truyện
+            </button>
+          </div>
         </div>
       </header>
 
@@ -167,6 +198,8 @@ export default function HomePage() {
       <footer className="relative z-10 py-4 text-center" style={{ borderTop: '1px solid rgba(124,58,237,0.1)' }}>
         <p className="text-xs" style={{ color: '#2a2a4a' }}>◈ AudioTruyen — Nghe truyện mọi lúc mọi nơi</p>
       </footer>
+
+      <AuthModal isOpen={authModalOpen} onClose={() => setAuthModalOpen(false)} />
     </div>
   )
 }

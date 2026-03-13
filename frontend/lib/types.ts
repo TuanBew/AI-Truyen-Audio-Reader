@@ -136,6 +136,8 @@ export interface AppState {
   currentChapter: ChapterData | null;
   currentChapterUrl: string | null;
   currentSentenceIndex: number;   // persisted top-level; mirrors sentenceQueue.currentSentenceIndex
+  /** Persisted per-chapter sentence index: chapterUrl → last sentence index */
+  chapterProgress: Record<string, number>;
   loadingToc: boolean;
   loadingChapter: boolean;
 
