@@ -132,9 +132,8 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
           }
         }
 
-        if (restoredIndex > 0) {
-          setResumeFromIndex(restoredIndex)
-        }
+        // Always set — even restoredIndex=0 resets stale value from previous chapter
+        setResumeFromIndex(restoredIndex)
       } catch (err) {
         console.error("Failed to split chapter into sentences:", err);
       }
