@@ -16,7 +16,8 @@ export default function MainLayout() {
   const { view, setView, settingsPanelOpen, toggleSettingsPanel } = useAppStore();
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     if (typeof window === 'undefined') return 260
-    return parseInt(localStorage.getItem('sidebar-width') ?? '260', 10)
+    const parsed = parseInt(localStorage.getItem('sidebar-width') ?? '', 10)
+    return isNaN(parsed) ? 260 : parsed
   })
 
   useEffect(() => {
