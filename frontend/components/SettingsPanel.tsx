@@ -351,9 +351,6 @@ export default function SettingsPanel() {
   const sl = (field: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     updateTTSSettings({ [field]: e.target.value });
 
-  const slNum = (field: string) => (e: React.ChangeEvent<HTMLInputElement>) =>
-    updateTTSSettings({ [field]: parseFloat(e.target.value) });
-
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
@@ -412,47 +409,6 @@ export default function SettingsPanel() {
                 </div>
               )
             })}
-          </div>
-        </section>
-
-        {/* Speed & Pitch */}
-        <section>
-          <h3 className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: '#a78bfa' }}>
-            Tốc độ &amp; Cao độ
-          </h3>
-          <div className="flex flex-col gap-4">
-            <div>
-              <div className="flex justify-between mb-1">
-                <label className="text-sm" style={{ color: '#8888b0' }}>Tốc độ đọc</label>
-                <span className="text-sm font-mono" style={{ color: '#a78bfa' }}>{ttsSettings.speed.toFixed(1)}×</span>
-              </div>
-              <input
-                type="range" min="0.5" max="2.0" step="0.1"
-                value={ttsSettings.speed}
-                onChange={slNum("speed")}
-                className="w-full accent-violet-500"
-              />
-              <div className="flex justify-between mt-0.5">
-                <span className="text-xs" style={{ color: '#4a4a7a' }}>0.5×</span>
-                <span className="text-xs" style={{ color: '#4a4a7a' }}>2.0×</span>
-              </div>
-            </div>
-            <div>
-              <div className="flex justify-between mb-1">
-                <label className="text-sm" style={{ color: '#8888b0' }}>Cao độ (Gemini)</label>
-                <span className="text-sm font-mono" style={{ color: '#a78bfa' }}>{ttsSettings.pitch.toFixed(1)}</span>
-              </div>
-              <input
-                type="range" min="-10" max="10" step="0.5"
-                value={ttsSettings.pitch}
-                onChange={slNum("pitch")}
-                className="w-full accent-violet-500"
-              />
-              <div className="flex justify-between mt-0.5">
-                <span className="text-xs" style={{ color: '#4a4a7a' }}>–10</span>
-                <span className="text-xs" style={{ color: '#4a4a7a' }}>+10</span>
-              </div>
-            </div>
           </div>
         </section>
       </div>

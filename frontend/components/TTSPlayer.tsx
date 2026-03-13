@@ -161,14 +161,14 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
     };
   }, []);
 
-  // When speed or pitch changes, cached blobs were synthesized at old settings — evict them
+  // When voice/provider changes, cached blobs were synthesized at old settings — evict them
   // so the next play uses the new values. Abort in-flight requests too.
   useEffect(() => {
     abortAllPrefetches();
     pendingRef.current.clear();
     clearSentenceAudioCache();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ttsSettings.speed, ttsSettings.pitch, ttsSettings.preferredProvider,
+  }, [ttsSettings.preferredProvider,
       ttsSettings.geminiVoice, ttsSettings.openaiVoice, ttsSettings.minimaxVoiceId]);
 
   const synthesizeSentence = useCallback(
