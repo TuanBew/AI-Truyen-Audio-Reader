@@ -128,6 +128,7 @@ export interface AppState {
   toc: TocData | null;
   currentChapter: ChapterData | null;
   currentChapterUrl: string | null;
+  currentSentenceIndex: number;   // persisted top-level; mirrors sentenceQueue.currentSentenceIndex
   loadingToc: boolean;
   loadingChapter: boolean;
 

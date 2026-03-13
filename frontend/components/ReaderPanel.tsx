@@ -39,6 +39,7 @@ export default function ReaderPanel() {
     setLoadingChapter,
     setWordTimings,
     setHighlightedWordIndex,
+    setToc,
     activeNovelId,
     updateNovelProgress,
     playerState,
@@ -63,6 +64,28 @@ export default function ReaderPanel() {
       behavior: "smooth",
     });
   }, [highlightedWordIndex]);
+
+  // Auto-resume: if a chapter was active before reload, silently re-fetch it
+  useEffect(() => {
+    const state = useAppStore.getState()
+    const { activeNovelId: storedNovelId, currentChapterUrl: storedUrl, savedNovels, currentChapter: storedChapter } = state
+    if (!storedNovelId || !storedUrl) return
+    if (storedChapter) return  // already loaded in this session
+
+    const novel = savedNovels.find((n) => n.id === storedNovelId)
+    if (!novel) return
+
+    setToc(novel.toc)
+    setLoadingChapter(true)
+    fetch(`/api/scrape/chapter?url=${encodeURIComponent(storedUrl)}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`)))
+      .then((data) => { setCurrentChapter(data) })
+      .catch((err) => {
+        toast.error(`Không thể khôi phục chương: ${err}`)
+        setCurrentChapterUrl(null)
+      })
+      .finally(() => setLoadingChapter(false))
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const navigateTo = useCallback(
     async (url: string | null | undefined) => {

@@ -14,6 +14,7 @@ const PROVIDER_LABELS: Record<TTSProvider, string> = {
   gemini: "Google Gemini",
   openai: "OpenAI",
   minimax: "MiniMax",
+  xtts: "XTTS",
   gtranslate: "Google Translate",
 };
 
@@ -21,6 +22,7 @@ const PROVIDER_COLORS: Record<TTSProvider, string> = {
   gemini: "text-blue-400",
   openai: "text-green-400",
   minimax: "text-purple-400",
+  xtts: "text-orange-400",
   gtranslate: "text-yellow-400",
 };
 
@@ -98,19 +100,33 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
         const data = await res.json();
         setSentences(data.sentences); // revokes previous blobs automatically
 
-        // Check for saved progress to offer resume toast
+        // Restore resume position: prefer Supabase (logged-in users), fall back to localStorage
         const userId = useAppStore.getState().authState.supabaseUserId
+        let restoredIndex = 0
+
         if (userId && currentChapter?.source_url) {
-          const { data: progress } = await supabase
+          const { data: progressData } = await supabase
             .from('reading_progress')
             .select('sentence_index')
             .eq('user_id', userId)
             .eq('chapter_url', currentChapter.source_url)
             .single()
 
-          if (progress && progress.sentence_index > 0) {
-            setResumeFromIndex(progress.sentence_index)
+          if (progressData && progressData.sentence_index > 0) {
+            restoredIndex = progressData.sentence_index
           }
+        }
+
+        // Guest fallback: use persisted store index
+        if (restoredIndex === 0) {
+          const persistedIndex = useAppStore.getState().currentSentenceIndex
+          if (persistedIndex > 0 && persistedIndex < data.sentences.length) {
+            restoredIndex = persistedIndex
+          }
+        }
+
+        if (restoredIndex > 0) {
+          setResumeFromIndex(restoredIndex)
         }
       } catch (err) {
         console.error("Failed to split chapter into sentences:", err);
@@ -203,6 +219,7 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
       audioRef.current.src = url;
       audioRef.current.play().catch(() => {});
       setCurrentSentenceIndex(index);
+      setPlaying(true);
 
       // Prefetch the next sentence (1-sentence lookahead)
       const next = index + 1;
@@ -215,7 +232,7 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
       const toEvict = index - 2;
       if (toEvict >= 0) evictSentenceAudio(toEvict);
     },
-    [synthesizeSentence, setCurrentSentenceIndex, evictSentenceAudio]
+    [synthesizeSentence, setCurrentSentenceIndex, setPlaying, evictSentenceAudio]
   );
 
   const seekToSentence = useCallback(
@@ -313,6 +330,23 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
   ]);
 
   const handlePlayPause = () => {
+    // Sentence-queue mode: route through per-sentence synthesis to respect provider byte limits
+    if (sentences.length > 0) {
+      if (playerState.isPlaying) {
+        audioRef.current?.pause();
+        setPlaying(false);
+      } else if (currentSentenceIndex >= 0) {
+        // Resume paused sentence
+        audioRef.current?.play().catch(() => {});
+        setPlaying(true);
+      } else {
+        // First play — start from saved resume point or sentence 0
+        playSentence(resumeFromIndex || 0);
+      }
+      return;
+    }
+
+    // Full-chapter fallback (used only when sentence splitting hasn't loaded yet)
     if (!audioBlobUrl) {
       synthesize();
       return;
@@ -332,6 +366,7 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
     setPlaying(false);
     setProgress(0);
     setHighlightedWordIndex(-1);
+    setCurrentSentenceIndex(-1); // allow Play to restart from sentence 0
   };
 
   const handleTimeUpdate = () => {

@@ -112,6 +112,7 @@ export const useAppStore = create<AppStore>()(
       toc: null,
       currentChapter: null,
       currentChapterUrl: null,
+      currentSentenceIndex: -1,
       loadingToc: false,
       loadingChapter: false,
       wordTimings: [],
@@ -299,6 +300,7 @@ export const useAppStore = create<AppStore>()(
 
       setCurrentSentenceIndex: (index: number) =>
         set((state) => ({
+          currentSentenceIndex: index,  // persisted top-level
           sentenceQueue: { ...state.sentenceQueue, currentSentenceIndex: index },
         })),
 
@@ -365,6 +367,8 @@ export const useAppStore = create<AppStore>()(
           savedFiles: [],
           isRecording: false,
         },
+        currentChapterUrl: state.currentChapterUrl,       // ADD
+        currentSentenceIndex: state.currentSentenceIndex, // ADD
       }),
     }
   )
