@@ -16,6 +16,7 @@ const PROVIDER_LABELS: Record<TTSProvider, string> = {
   openai: "OpenAI",
   minimax: "MiniMax",
   xtts: "XTTS",
+  edge: "Microsoft Edge",
   gtranslate: "Google Translate",
 };
 
@@ -24,6 +25,7 @@ const PROVIDER_COLORS: Record<TTSProvider, string> = {
   openai: "text-green-400",
   minimax: "text-purple-400",
   xtts: "text-orange-400",
+  edge: "text-cyan-400",
   gtranslate: "text-yellow-400",
 };
 
