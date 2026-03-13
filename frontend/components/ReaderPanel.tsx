@@ -4,8 +4,6 @@ import { useRef, useEffect, useCallback, useMemo, Fragment } from "react";
 import { Loader2, ChevronLeft, ChevronRight, BookOpen } from "lucide-react";
 import { toast } from "react-toastify";
 import { useAppStore } from "@/lib/store";
-import TTSPlayer from "./TTSPlayer";
-import RecordingControls from "./RecordingControls";
 
 /**
  * Split chapter content into a flat array of words, preserving paragraph boundaries.
@@ -85,7 +83,7 @@ export default function ReaderPanel() {
     playerState,
   } = useAppStore();
 
-  const { highlightedWordIndex, autoAdvance } = playerState;
+  const { highlightedWordIndex } = playerState;
 
   const { sentences, currentSentenceIndex: activeSentenceIdx } = useAppStore(
     (s) => s.sentenceQueue
@@ -177,10 +175,10 @@ export default function ReaderPanel() {
 
   if (!toc && !currentChapter && !loadingChapter) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center text-gray-600 gap-4 p-8">
+      <div className="flex-1 flex flex-col items-center justify-center gap-4 p-8" style={{ background: '#0c0c1e', color: '#6d6d9a' }}>
         <BookOpen size={48} className="opacity-40" />
         <div className="text-center">
-          <p className="text-lg font-medium text-gray-500">Chưa có truyện nào được tải</p>
+          <p className="text-lg font-medium" style={{ color: '#6d6d9a' }}>Chưa có truyện nào được tải</p>
           <p className="text-sm mt-1">Nhập URL truyện vào ô bên trái và nhấn 🔍</p>
         </div>
       </div>
@@ -189,7 +187,7 @@ export default function ReaderPanel() {
 
   if (loadingChapter) {
     return (
-      <div className="flex-1 flex items-center justify-center text-gray-500">
+      <div className="flex-1 flex items-center justify-center" style={{ background: '#0c0c1e', color: '#6d6d9a' }}>
         <Loader2 size={32} className="animate-spin mr-3" />
         <span>Đang tải chương…</span>
       </div>
@@ -198,7 +196,7 @@ export default function ReaderPanel() {
 
   if (!currentChapter) {
     return (
-      <div className="flex-1 flex items-center justify-center text-gray-600">
+      <div className="flex-1 flex items-center justify-center" style={{ background: '#0c0c1e', color: '#6d6d9a' }}>
         <p>← Chọn chương để bắt đầu đọc</p>
       </div>
     );
@@ -208,50 +206,32 @@ export default function ReaderPanel() {
   const wordTokens = splitToWords(currentChapter.content);
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
+    <div className="flex-1 flex flex-col overflow-hidden" style={{ background: '#0c0c1e' }}>
       {/* Chapter header */}
-      <div className="px-6 py-4 border-b border-gray-800 flex-shrink-0">
-        <p className="text-xs text-gray-500 mb-1">{currentChapter.novel_title}</p>
-        <h1 className="text-xl font-bold text-white leading-snug">
+      <div
+        className="px-6 py-4 flex-shrink-0"
+        style={{ borderBottom: '1px solid rgba(124,58,237,0.2)' }}
+      >
+        <p className="text-xs mb-1" style={{ color: '#6d6d9a' }}>{currentChapter.novel_title}</p>
+        <h1 className="text-xl font-bold leading-snug" style={{ color: '#e2e8f0' }}>
           {currentChapter.chapter_title}
         </h1>
       </div>
 
-      {/* TTS Player + Recording Controls */}
-      <div className="flex-shrink-0 border-b border-gray-800 bg-gray-900">
-        <TTSPlayer
-          text={currentChapter.content}
-          chapterTitle={currentChapter.chapter_title}
-          chapterUrl={currentChapter.source_url}
-          onEnded={() => {
-            if (autoAdvance && currentChapter.next_url) {
-              setTimeout(() => navigateTo(currentChapter.next_url!), 800)
-            }
-          }}
-        />
-        <RecordingControls
-          text={currentChapter.content}
-          chapterTitle={currentChapter.chapter_title}
-        />
-      </div>
-
       {/* Chapter text — sentence-level when TTS loaded, word-level fallback */}
-      <div
-        ref={contentRef}
-        className="flex-1 overflow-y-auto px-8 py-6 w-full"
-      >
-        <div className="mx-auto max-w-[72ch] text-[1.25rem] leading-[1.85] text-gray-100 font-sans tracking-wide">
+      <div ref={contentRef} className="flex-1 overflow-y-auto px-8 py-6 w-full">
+        <div className="mx-auto max-w-[72ch] text-[1.25rem] leading-[1.85] font-sans tracking-wide"
+          style={{ color: '#c7c7e0' }}>
           {sentenceSegments.length > 0 ? (
             sentenceSegments.map((seg) => (
               <Fragment key={seg.index}>
                 {seg.paraBreak && seg.index > 0 && <div className="mt-[1em]" />}
                 <span
                   id={`sent-${seg.index}`}
-                  className={
-                    seg.index === activeSentenceIdx
-                      ? 'bg-amber-400/20 text-amber-100 rounded px-0.5 transition-colors duration-200'
-                      : 'transition-colors duration-200'
-                  }
+                  className="transition-colors duration-200"
+                  style={seg.index === activeSentenceIdx
+                    ? { background: 'rgba(167,139,250,0.15)', color: '#e2e8f0', borderRadius: '2px', padding: '0 2px' }
+                    : undefined}
                 >
                   {seg.text}{' '}
                 </span>
@@ -266,11 +246,10 @@ export default function ReaderPanel() {
                     {token.paraBreakBefore && <br className="mb-3 block" />}
                     <span
                       ref={isCurrent ? highlightedRef : undefined}
-                      className={`transition-colors duration-100 ${
-                        isCurrent
-                          ? "text-amber-300 underline decoration-amber-400/50 decoration-2"
-                          : ""
-                      }`}
+                      className="transition-colors duration-100"
+                      style={isCurrent
+                        ? { color: '#fbbf24', textDecoration: 'underline', textDecorationColor: 'rgba(251,191,36,0.5)' }
+                        : undefined}
                     >
                       {token.word}
                     </span>{" "}
@@ -283,25 +262,28 @@ export default function ReaderPanel() {
       </div>
 
       {/* Prev / Next navigation */}
-      <div className="flex-shrink-0 border-t border-gray-800 px-6 py-3 flex justify-between items-center bg-gray-900">
+      <div
+        className="flex-shrink-0 px-6 py-3 flex justify-between items-center"
+        style={{ borderTop: '1px solid rgba(124,58,237,0.2)', background: '#0e0e28' }}
+      >
         <button
           onClick={() => navigateTo(currentChapter.prev_url)}
           disabled={!currentChapter.prev_url}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors text-sm text-gray-300 hover:text-white"
+          className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+          style={{ background: '#1a1a3e', color: '#a78bfa', border: '1px solid rgba(124,58,237,0.3)' }}
         >
-          <ChevronLeft size={16} />
-          Chương trước
+          <ChevronLeft size={16} /> Chương trước
         </button>
-        <span className="text-xs text-gray-600">
-          {currentChapter.chapter_number ? `Chương ${currentChapter.chapter_number}` : ""}
+        <span className="text-xs" style={{ color: '#4a4a7a' }}>
+          {currentChapter.chapter_number ? `Chương ${currentChapter.chapter_number}` : ''}
         </span>
         <button
           onClick={() => navigateTo(currentChapter.next_url)}
           disabled={!currentChapter.next_url}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors text-sm text-gray-300 hover:text-white"
+          className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+          style={{ background: '#1a1a3e', color: '#a78bfa', border: '1px solid rgba(124,58,237,0.3)' }}
         >
-          Chương sau
-          <ChevronRight size={16} />
+          Chương sau <ChevronRight size={16} />
         </button>
       </div>
     </div>
