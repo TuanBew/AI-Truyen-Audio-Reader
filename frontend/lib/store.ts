@@ -97,6 +97,18 @@ interface AppStore extends AppState {
   registerAbortController: (index: number, controller: AbortController) => void;
   abortAllPrefetches: () => void;
   setCurrentSentenceWordTimings: (timings: WordTiming[]) => void;
+
+  // Ambient player
+  ambientState: {
+    currentTrackId: string | null
+    volume: number
+    loopMode: 'all' | 'one'
+    isPlaying: boolean
+  }
+  setAmbientTrack: (id: string | null) => void
+  setAmbientVolume: (volume: number) => void
+  setAmbientLoopMode: (mode: 'all' | 'one') => void
+  setAmbientPlaying: (playing: boolean) => void
 }
 
 export const useAppStore = create<AppStore>()(
@@ -135,6 +147,12 @@ export const useAppStore = create<AppStore>()(
         savedFiles: [],
       },
       settingsPanelOpen: false,
+      ambientState: {
+        currentTrackId: null,
+        volume: 0.4,
+        loopMode: 'all',
+        isPlaying: false,
+      },
       authState: {
         supabaseUserId: null,
         supabaseEmail: null,
@@ -269,6 +287,16 @@ export const useAppStore = create<AppStore>()(
       toggleSettingsPanel: () =>
         set((s) => ({ settingsPanelOpen: !s.settingsPanelOpen })),
 
+      // ── Ambient player ────────────────────────────────────
+      setAmbientTrack: (id) =>
+        set((s) => ({ ambientState: { ...s.ambientState, currentTrackId: id } })),
+      setAmbientVolume: (volume) =>
+        set((s) => ({ ambientState: { ...s.ambientState, volume } })),
+      setAmbientLoopMode: (loopMode) =>
+        set((s) => ({ ambientState: { ...s.ambientState, loopMode } })),
+      setAmbientPlaying: (isPlaying) =>
+        set((s) => ({ ambientState: { ...s.ambientState, isPlaying } })),
+
       // ── Auth (transient) ─────────────────────────────────
       setAuthState: (auth) =>
         set((state) => ({
@@ -369,6 +397,12 @@ export const useAppStore = create<AppStore>()(
         },
         currentChapterUrl: state.currentChapterUrl,       // ADD
         currentSentenceIndex: state.currentSentenceIndex, // ADD
+        ambientState: {
+          currentTrackId: state.ambientState.currentTrackId,
+          volume: state.ambientState.volume,
+          loopMode: state.ambientState.loopMode,
+          // isPlaying intentionally excluded — avoids browser autoplay-policy block on reload
+        },
       }),
     }
   )
