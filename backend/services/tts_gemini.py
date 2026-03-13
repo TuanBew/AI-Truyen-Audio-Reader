@@ -141,9 +141,6 @@ def synthesize_with_timing(
     """
     client = get_client()
 
-    ssml_text, words = _text_to_ssml_with_marks(text)
-
-    synthesis_input = texttospeech.SynthesisInput(ssml=ssml_text)
     voice = texttospeech.VoiceSelectionParams(
         language_code=language_code,
         name=voice_name,
@@ -155,42 +152,16 @@ def synthesize_with_timing(
     )
 
     try:
+        # Note: enable_time_pointing / TimepointType was removed in
+        # google-cloud-texttospeech ≥ 2.x. Synthesize without it and
+        # return empty timings; the player will still work (no per-word
+        # highlight, but audio plays correctly).
         response = client.synthesize_speech(
-            input=synthesis_input,
+            input=texttospeech.SynthesisInput(text=text),
             voice=voice,
             audio_config=audio_config,
-            enable_time_pointing=[
-                texttospeech.SynthesizeSpeechRequest.TimepointType.SSML_MARK
-            ],
         )
-
-        audio_bytes = response.audio_content
-
-        # Build timings from timepoints
-        timings: list[WordTiming] = []
-        timepoints = list(response.timepoints) if hasattr(response, "timepoints") else []
-
-        if timepoints and words:
-            for tp in timepoints:
-                # mark_name is "w{i}" — extract the index
-                try:
-                    idx = int(tp.mark_name[1:])
-                    if 0 <= idx < len(words):
-                        timings.append(WordTiming(
-                            word=words[idx],
-                            start_ms=tp.time_seconds * 1000,
-                            end_ms=tp.time_seconds * 1000,  # filled below
-                        ))
-                except (ValueError, IndexError):
-                    pass
-
-            # Estimate end times from next word's start
-            for i in range(len(timings) - 1):
-                timings[i]["end_ms"] = timings[i + 1]["start_ms"]
-            if timings:
-                timings[-1]["end_ms"] = timings[-1]["start_ms"] + 400  # last word ~400ms
-
-        return audio_bytes, timings
+        return response.audio_content, []
 
     except ResourceExhausted as e:
         raise GeminiQuotaError(f"Google TTS quota exhausted: {e}")

@@ -117,8 +117,8 @@ class SplitRequest(BaseModel):
     @field_validator("text")
     @classmethod
     def text_max_length(cls, v: str) -> str:
-        if len(v) > 5000:
-            raise ValueError("Text exceeds 5000 character limit")
+        if len(v) > 100_000:
+            raise ValueError("Text exceeds 100,000 character limit")
         return v
 
 

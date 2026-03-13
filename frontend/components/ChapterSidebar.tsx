@@ -14,7 +14,7 @@ export default function ChapterSidebar() {
     toc, setToc,
     loadingToc, setLoadingToc,
     currentChapterUrl, setCurrentChapterUrl,
-    setCurrentChapter, setLoadingChapter,
+    currentChapter, setCurrentChapter, setLoadingChapter,
     activeNovelId, saveNovel, updateNovelProgress,
     setView,
     isChapterFinished,
@@ -60,7 +60,7 @@ export default function ChapterSidebar() {
   }, [inputUrl, setLoadingToc, setToc, setNovelUrl, saveNovel]);
 
   const loadChapter = useCallback(async (chapterUrl: string, chapterTitle: string) => {
-    if (currentChapterUrl === chapterUrl) return;
+    if (currentChapterUrl === chapterUrl && currentChapter !== null) return;
     setCurrentChapterUrl(chapterUrl);
     setLoadingChapter(true);
 
@@ -84,7 +84,7 @@ export default function ChapterSidebar() {
     } finally {
       setLoadingChapter(false);
     }
-  }, [currentChapterUrl, setCurrentChapterUrl, setLoadingChapter, setCurrentChapter, activeNovelId, updateNovelProgress]);
+  }, [currentChapterUrl, currentChapter, setCurrentChapterUrl, setLoadingChapter, setCurrentChapter, activeNovelId, updateNovelProgress]);
 
   return (
     <div className="flex flex-col h-full">
