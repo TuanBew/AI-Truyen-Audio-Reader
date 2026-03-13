@@ -8,7 +8,7 @@ import AudioVisualizer from "./AudioVisualizer";
 import { toast } from "react-toastify";
 import { useAppStore } from "@/lib/store";
 import { supabase } from "@/lib/supabase";
-import type { TTSProvider, WordTiming } from "@/lib/types";
+import type { TTSProvider } from "@/lib/types";
 import { useSyncProgress } from "@/lib/hooks/useSyncProgress";
 
 const PROVIDER_LABELS: Record<TTSProvider, string> = {
@@ -46,9 +46,7 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
     wordTimings,
     setPlaying,
     setPlayerLoading,
-    setProviderUsed,
     setAutoAdvance,
-    setWordTimings,
     setHighlightedWordIndex,
     markChapterFinished,
     isChapterFinished,
@@ -75,7 +73,6 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
   const audioRef = useRef<HTMLAudioElement | null>(null);
   // Deduplication map: index → in-flight promise, so concurrent calls share one request
   const pendingRef = useRef<Map<number, Promise<string | null>>>(new Map());
-  const [audioBlobUrl, setAudioBlobUrl] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
   const markedFinishedRef = useRef(false);
   const [resumeFromIndex, setResumeFromIndex] = useState(0);
@@ -85,13 +82,6 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
     markedFinishedRef.current = isChapterFinished(chapterUrl);
     setHighlightedWordIndex(-1);
   }, [chapterUrl, isChapterFinished, setHighlightedWordIndex]);
-
-  // Clean up blob URL on unmount or new audio
-  useEffect(() => {
-    return () => {
-      if (audioBlobUrl) URL.revokeObjectURL(audioBlobUrl);
-    };
-  }, [audioBlobUrl]);
 
   // Split chapter into sentences when the loaded chapter changes
   useEffect(() => {
@@ -282,122 +272,33 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
     [abortAllPrefetches, playSentence]
   );
 
-  const synthesize = useCallback(async () => {
-    setPlayerLoading(true);
-    setPlaying(false);
-    setHighlightedWordIndex(-1);
-    markedFinishedRef.current = isChapterFinished(chapterUrl);
-
-    // Revoke old blob
-    if (audioBlobUrl) {
-      URL.revokeObjectURL(audioBlobUrl);
-      setAudioBlobUrl(null);
-    }
-
-    try {
-      const body = {
-        text: text.slice(0, 7500),
-        preferred_provider: ttsSettings.preferredProvider,
-        audio_format: ttsSettings.audioFormat,
-        gemini_voice: ttsSettings.geminiVoice,
-        gemini_language: ttsSettings.geminiLanguage,
-        openai_voice: ttsSettings.openaiVoice,
-        openai_model: ttsSettings.openaiModel,
-        minimax_voice_id: ttsSettings.minimaxVoiceId,
-        speed: ttsSettings.speed,
-        pitch: ttsSettings.pitch,
-      };
-
-      const res = await fetch("/api/tts/synthesize-with-timing", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.detail || `HTTP ${res.status}`);
-      }
-
-      const data = await res.json();
-      const providerUsed = (data.provider_used ?? "gemini") as TTSProvider;
-      const fallbackUsed = !!data.fallback_used;
-      const fallbackReason = data.fallback_reason ?? "";
-
-      setProviderUsed(providerUsed, fallbackUsed, fallbackReason);
-
-      if (fallbackUsed && fallbackReason) {
-        toast.warn(
-          `Dùng ${PROVIDER_LABELS[providerUsed]} (dự phòng): ${fallbackReason.split(":")[0]}`,
-          { autoClose: 5000 }
-        );
-      }
-
-      // Store word timings
-      const timings: WordTiming[] = data.word_timings ?? [];
-      setWordTimings(timings);
-
-      // Decode base64 audio → blob URL
-      const audioBytes = Uint8Array.from(atob(data.audio_b64), (c) => c.charCodeAt(0));
-      const mimeType = data.audio_format === "wav" ? "audio/wav" : "audio/mpeg";
-      const blob = new Blob([audioBytes], { type: mimeType });
-      const url = URL.createObjectURL(blob);
-      setAudioBlobUrl(url);
-
-      // Play immediately
-      setTimeout(() => {
-        audioRef.current?.play().catch(() => {});
-        setPlaying(true);
-      }, 100);
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Lỗi tổng hợp giọng đọc";
-      toast.error(`Lỗi TTS: ${msg}`);
-    } finally {
-      setPlayerLoading(false);
-    }
-  }, [
-    text,
-    chapterUrl,
-    ttsSettings,
-    audioBlobUrl,
-    setPlaying,
-    setPlayerLoading,
-    setProviderUsed,
-    setWordTimings,
-    setHighlightedWordIndex,
-    isChapterFinished,
-  ]);
-
   const handlePlayPause = () => {
-    // Sentence-queue mode: route through per-sentence synthesis to respect provider byte limits
-    if (sentences.length > 0) {
-      if (playerState.isPlaying) {
-        audioRef.current?.pause();
-        setPlaying(false);
-      } else if (currentSentenceIndex >= 0) {
-        // Resume paused sentence
-        audioRef.current?.play().catch(() => {});
-        setPlaying(true);
-      } else {
-        // First play — start from saved resume point or sentence 0
-        playSentence(resumeFromIndex || 0);
-      }
-      return;
-    }
-
-    // Full-chapter fallback (used only when sentence splitting hasn't loaded yet)
-    if (!audioBlobUrl) {
-      synthesize();
-      return;
-    }
     if (playerState.isPlaying) {
       audioRef.current?.pause();
       setPlaying(false);
-    } else {
+      return;
+    }
+    if (sentences.length === 0) return; // sentences not yet loaded — button disabled in JSX
+    if (currentSentenceIndex >= 0) {
+      // Resume paused sentence
       audioRef.current?.play().catch(() => {});
       setPlaying(true);
+    } else {
+      // First play — start from saved resume point or sentence 0
+      playSentence(resumeFromIndex || 0);
     }
   };
+
+  const handleReplay = useCallback(() => {
+    if (!audioRef.current) return;
+    audioRef.current.pause();
+    audioRef.current.src = '';          // clear src before revoking blobs
+    abortAllPrefetches();
+    pendingRef.current.clear();
+    clearSentenceAudioCache();
+    setCurrentSentenceIndex(-1);
+    playSentence(0);
+  }, [abortAllPrefetches, clearSentenceAudioCache, setCurrentSentenceIndex, playSentence]);
 
   const handleStop = () => {
     audioRef.current?.pause();
@@ -550,7 +451,6 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
       {/* Audio element (hidden) */}
       <audio
         ref={audioRef}
-        src={audioBlobUrl ?? undefined}
         onTimeUpdate={handleTimeUpdate}
         onEnded={handleEnded}
         onError={() => toast.error("Lỗi phát âm thanh")}
@@ -559,30 +459,30 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
       <div className="flex items-center gap-3">
         {/* Controls */}
         <div className="flex items-center gap-2">
-          {/* Re-synthesize */}
+          {/* Replay */}
           <button
-            onClick={() => synthesize()}
-            disabled={isLoading}
-            title="Tổng hợp lại"
+            onClick={handleReplay}
+            disabled={sentences.length === 0}
+            title="Phát lại từ đầu"
             className="p-1.5 rounded transition-colors disabled:opacity-40"
             style={{ color: '#a78bfa' }}
           >
-            <RefreshCw size={14} className={isLoading ? "animate-spin" : ""} />
+            <RefreshCw size={14} />
           </button>
 
           {/* Play / Pause */}
           <button
             onClick={handlePlayPause}
-            disabled={isLoading}
+            disabled={isLoading || sentences.length === 0}
             className="flex items-center justify-center w-10 h-10 rounded-full transition-colors"
             style={
-              isLoading
-                ? { background: 'rgba(124,58,237,0.2)', color: '#6d6d9a', cursor: 'wait' }
+              isLoading || sentences.length === 0
+                ? { background: 'rgba(124,58,237,0.2)', color: '#6d6d9a', cursor: sentences.length === 0 ? 'default' : 'wait' }
                 : { background: '#7c3aed', color: '#fff', boxShadow: '0 0 12px rgba(124,58,237,0.5)' }
             }
             title={playerState.isPlaying ? "Dừng" : "Phát"}
           >
-            {isLoading ? (
+            {isLoading || sentences.length === 0 ? (
               <Loader2 size={18} className="animate-spin" style={{ color: '#a78bfa' }} />
             ) : playerState.isPlaying ? (
               <Pause size={18} />
