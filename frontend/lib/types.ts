@@ -112,6 +112,13 @@ export interface AuthState {
   syncStatus: SyncStatus
 }
 
+export interface AmbientState {
+  currentTrackId: string | null
+  volume: number
+  loopMode: 'all' | 'one'
+  isPlaying: boolean
+}
+
 export interface AppState {
   // View / navigation
   view: AppView;

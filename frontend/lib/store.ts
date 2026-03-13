@@ -12,6 +12,7 @@ import type {
   WordTiming,
   AuthState,
   SentenceQueueState,
+  AmbientState,
 } from "./types";
 
 const defaultTTSSettings: TTSSettings = {
@@ -99,12 +100,7 @@ interface AppStore extends AppState {
   setCurrentSentenceWordTimings: (timings: WordTiming[]) => void;
 
   // Ambient player
-  ambientState: {
-    currentTrackId: string | null
-    volume: number
-    loopMode: 'all' | 'one'
-    isPlaying: boolean
-  }
+  ambientState: AmbientState
   setAmbientTrack: (id: string | null) => void
   setAmbientVolume: (volume: number) => void
   setAmbientLoopMode: (mode: 'all' | 'one') => void
