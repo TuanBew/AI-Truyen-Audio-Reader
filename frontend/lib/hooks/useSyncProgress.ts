@@ -3,7 +3,7 @@
 // Schema: reading_progress(user_id, chapter_url, sentence_index, word_index, is_finished, updated_at)
 // One-time migration: ALTER TABLE reading_progress ADD COLUMN IF NOT EXISTS is_finished boolean DEFAULT false;
 
-import { useCallback, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAppStore } from '@/lib/store'
 
@@ -15,6 +15,13 @@ export function useSyncProgress() {
   const userId = useAppStore((s) => s.authState.supabaseUserId)
   const setAuthState = useAppStore((s) => s.setAuthState)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Cancel pending debounced upsert on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+    }
+  }, [])
 
   return useCallback(
     (chapterUrl: string, sentenceIndex: number, wordIndex: number, isFinished: boolean) => {
