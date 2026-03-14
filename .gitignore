@@ -43,3 +43,10 @@ Thumbs.db
 
 # Git worktrees
 .worktrees/
+
+# Local tooling / brainstorming artifacts
+.superpowers/
+brainstorm-ui-direction.png
+screenshots/
+CLAUDE.md
+task_progress.md
