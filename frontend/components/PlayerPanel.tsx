@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useState, useEffect } from 'react'
+import { useCallback, useState, useEffect, useRef } from 'react'
 import { useAppStore } from '@/lib/store'
 import { toast } from 'react-toastify'
 import TTSPlayer from './TTSPlayer'
@@ -58,6 +58,20 @@ export default function PlayerPanel() {
     [setCurrentChapterUrl, setLoadingChapter, setCurrentChapter, activeNovelId, updateNovelProgress]
   )
 
+  // Stable ref so handleChapterEnded is never recreated and never has a stale closure
+  const navigateToRef = useRef(navigateTo)
+  useEffect(() => { navigateToRef.current = navigateTo }, [navigateTo])
+
+  // Called by TTSPlayer when the last sentence of a chapter finishes.
+  // Reads all dynamic values from the store directly — never from closure — so
+  // autoAdvance and next_url are always current regardless of render timing.
+  const handleChapterEnded = useCallback(() => {
+    const { autoAdvance, currentChapter: ch } = useAppStore.getState()
+    if (autoAdvance && ch?.next_url) {
+      setTimeout(() => navigateToRef.current(ch.next_url!), 800)
+    }
+  }, [])
+
   return (
     <div
       className="flex flex-col h-full overflow-hidden"
@@ -70,13 +84,7 @@ export default function PlayerPanel() {
             text={currentChapter.content}
             chapterTitle={currentChapter.chapter_title}
             chapterUrl={currentChapter.source_url}
-            onEnded={() => {
-              // Read from store directly to avoid stale closure
-              const { autoAdvance } = useAppStore.getState()
-              if (autoAdvance && currentChapter.next_url) {
-                setTimeout(() => navigateTo(currentChapter.next_url!), 800)
-              }
-            }}
+            onEnded={handleChapterEnded}
           />
         )}
       </div>
