@@ -140,112 +140,123 @@ async def scrape_chapter(
         except httpx.RequestError as e:
             raise HTTPException(status_code=502, detail=f"Network error: {e}")
 
-    soup = BeautifulSoup(resp.text, "lxml")
+        html_content = resp.text
 
-    # --- Novel title: breadcrumb or h1 ---
-    novel_title = ""
-    crumb = soup.select("nav.breadcrumb a, .breadcrumb-item a, ol.breadcrumb a, .breadcrumb a")
-    if len(crumb) >= 2:
-        novel_title = crumb[1].get_text(strip=True)
-    if not novel_title:
-        h1 = soup.select_one("h1")
-        if h1:
-            novel_title = h1.get_text(strip=True)
+    try:
+        soup = BeautifulSoup(html_content, "lxml")
 
-    # --- Chapter title: look inside the content area or use page h2 ---
-    chapter_title = ""
-    # truyenplus.vn places the chapter heading in h2 after the reading div
-    for sel in ["#vungdoc h2", "h2.chapter-title", ".chapter-title h2", "h2"]:
-        tag = soup.select_one(sel)
-        if tag:
-            chapter_title = tag.get_text(strip=True)
-            break
-    # Fallback: use page <title>
-    if not chapter_title:
-        title_tag = soup.select_one("title")
-        if title_tag:
-            chapter_title = title_tag.get_text(strip=True).split("|")[0].strip()
+        # --- Novel title: breadcrumb or h1 ---
+        novel_title = ""
+        crumb = soup.select("nav.breadcrumb a, .breadcrumb-item a, ol.breadcrumb a, .breadcrumb a")
+        if len(crumb) >= 2:
+            novel_title = crumb[1].get_text(strip=True)
+        if not novel_title:
+            h1 = soup.select_one("h1")
+            if h1:
+                novel_title = h1.get_text(strip=True)
 
-    chapter_number = None
-    m = re.search(r"ch[uư]ơng[- _]*(\d+)", chapter_title, re.IGNORECASE)
-    if m:
-        chapter_number = int(m.group(1))
+        # --- Chapter title: look inside the content area or use page h2 ---
+        chapter_title = ""
+        # truyenplus.vn places the chapter heading in h2 after the reading div
+        for sel in ["#vungdoc h2", "h2.chapter-title", ".chapter-title h2", "h2"]:
+            tag = soup.select_one(sel)
+            if tag:
+                chapter_title = tag.get_text(strip=True)
+                break
+        # Fallback: use page <title>
+        if not chapter_title:
+            title_tag = soup.select_one("title")
+            if title_tag:
+                chapter_title = title_tag.get_text(strip=True).split("|")[0].strip()
 
-    # --- Chapter content ---
-    # truyenplus.vn puts chapter text in div#vungdoc
-    content_div = soup.select_one("#vungdoc, #chapter-c, .chapter-content, .box-chap, article")
-    if not content_div:
-        raise HTTPException(status_code=422, detail="Could not find chapter content on page.")
+        chapter_number = None
+        m = re.search(r"ch[uư]ơng[- _]*(\d+)", chapter_title, re.IGNORECASE)
+        if m:
+            chapter_number = int(m.group(1))
 
-    # Remove noise elements: scripts, ads, headings, and navigation links
-    for tag in content_div.select("script, style, .ads, .ad, ins, .adsbox, h1, h2, h3, a"):
-        tag.decompose()
+        # --- Chapter content ---
+        # truyenplus.vn puts chapter text in div#vungdoc
+        content_div = soup.select_one("#vungdoc, #chapter-c, .chapter-content, .box-chap, article")
+        if not content_div:
+            raise HTTPException(status_code=422, detail="Could not find chapter content on page.")
 
-    # Utility to detect short nav/header paragraphs (≤ 12 words and no period)
-    def _is_nav_paragraph(text: str) -> bool:
-        stripped = text.strip()
-        if not stripped:
-            return True
-        words = stripped.split()
-        # Short lines that look like navigation or metadata
-        if len(words) <= 12 and "." not in stripped and "!" not in stripped and "?" not in stripped:
-            nav_keywords = ["chương", "trước", "tiếp", "ebook", "tải", "giám", "tộc"]
-            lower = stripped.lower()
-            if any(kw in lower for kw in nav_keywords):
+        # Remove noise elements: scripts, ads, headings, and navigation links
+        for tag in content_div.select("script, style, .ads, .ad, ins, .adsbox, h1, h2, h3, a"):
+            tag.decompose()
+
+        # Utility to detect short nav/header paragraphs (≤ 12 words and no period)
+        def _is_nav_paragraph(text: str) -> bool:
+            stripped = text.strip()
+            if not stripped:
                 return True
-        return False
+            words = stripped.split()
+            # Short lines that look like navigation or metadata
+            if len(words) <= 12 and "." not in stripped and "!" not in stripped and "?" not in stripped:
+                nav_keywords = ["chương", "trước", "tiếp", "ebook", "tải", "giám", "tộc"]
+                lower = stripped.lower()
+                if any(kw in lower for kw in nav_keywords):
+                    return True
+            return False
 
-    paragraphs = [
-        _clean_text(p.get_text())
-        for p in content_div.find_all("p")
-        if p.get_text(strip=True) and not _is_nav_paragraph(p.get_text())
-    ]
-    if not paragraphs:
-        # Fallback: split raw text by newlines, still filter nav lines
-        raw = content_div.get_text("\n")
         paragraphs = [
-            _clean_text(line)
-            for line in raw.splitlines()
-            if line.strip() and not _is_nav_paragraph(line)
+            _clean_text(p.get_text())
+            for p in content_div.find_all("p")
+            if p.get_text(strip=True) and not _is_nav_paragraph(p.get_text())
         ]
+        if not paragraphs:
+            # Fallback: split raw text by newlines, still filter nav lines
+            raw = content_div.get_text("\n")
+            paragraphs = [
+                _clean_text(line)
+                for line in raw.splitlines()
+                if line.strip() and not _is_nav_paragraph(line)
+            ]
 
-    content = "\n\n".join(paragraphs)
+        content = "\n\n".join(paragraphs)
 
-    # --- Prev / Next navigation ---
-    # truyenplus.vn uses <a class="prev"> and <a class="next">
-    prev_url = next_url = None
+        # --- Prev / Next navigation ---
+        # truyenplus.vn uses <a class="prev"> and <a class="next">
+        prev_url = next_url = None
 
-    prev_tag = soup.select_one("a.prev, a.prev-chap, a[rel='prev'], a.btn-prev")
-    if not prev_tag:
-        for a in soup.find_all("a"):
-            text = a.get_text(strip=True)
-            href = a.get("href", "")
-            if "trước" in text and (href.startswith("/") or href.startswith("http")):
-                prev_tag = a
-                break
+        prev_tag = soup.select_one("a.prev, a.prev-chap, a[rel='prev'], a.btn-prev")
+        if not prev_tag:
+            for a in soup.find_all("a"):
+                text = a.get_text(strip=True)
+                href = a.get("href", "")
+                if "trước" in text and (href.startswith("/") or href.startswith("http")):
+                    prev_tag = a
+                    break
 
-    if prev_tag:
-        href = prev_tag.get("href", "")
-        if href.startswith("/"):
-            prev_url = BASE_URL + href
-        elif href.startswith("http"):
-            prev_url = href
+        if prev_tag:
+            href = prev_tag.get("href", "")
+            if href.startswith("/"):
+                prev_url = BASE_URL + href
+            elif href.startswith("http"):
+                prev_url = href
 
-    next_tag = soup.select_one("a.next, a.next-chap, a[rel='next'], a.btn-next")
-    if not next_tag:
-        for a in soup.find_all("a"):
-            text = a.get_text(strip=True)
-            href = a.get("href", "")
-            if "tiếp" in text and (href.startswith("/") or href.startswith("http")):
-                next_tag = a
-                break
+        next_tag = soup.select_one("a.next, a.next-chap, a[rel='next'], a.btn-next")
+        if not next_tag:
+            for a in soup.find_all("a"):
+                text = a.get_text(strip=True)
+                href = a.get("href", "")
+                if "tiếp" in text and (href.startswith("/") or href.startswith("http")):
+                    next_tag = a
+                    break
 
-    if next_tag:
-        href = next_tag.get("href", "")
-        if href.startswith("/"):
-            next_url = BASE_URL + href
-        elif href.startswith("http"):
-            next_url = href
+        if next_tag:
+            href = next_tag.get("href", "")
+            if href.startswith("/"):
+                next_url = BASE_URL + href
+            elif href.startswith("http"):
+                next_url = href
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Không thể phân tích nội dung chương: {e}",
+        )
 
     return ChapterResponse(
         novel_title=novel_title,

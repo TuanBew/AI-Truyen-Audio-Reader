@@ -35,9 +35,9 @@ const defaultTTSSettings: TTSSettings = {
 /** Derive a stable ID from a novel URL */
 export function novelIdFromUrl(url: string): string {
   try {
-    return btoa(url).replace(/[^a-zA-Z0-9]/g, "").slice(0, 32);
+    return btoa(url).replace(/[^a-zA-Z0-9]/g, "");
   } catch {
-    return url.replace(/[^a-zA-Z0-9]/g, "").slice(0, 32);
+    return url.replace(/[^a-zA-Z0-9]/g, "");
   }
 }
 
@@ -415,6 +415,26 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: "audiotruyen-store",
+      version: 1,
+      migrate: (persistedState: unknown, fromVersion: number) => {
+        if (fromVersion === 0) {
+          const s = persistedState as Record<string, unknown>
+          const novels = (s.savedNovels as Array<{ id: string; url: string }> | undefined) ?? []
+          // Recompute IDs with the new full-btoa function and deduplicate by URL
+          const seen = new Set<string>()
+          const deduped = novels
+            .filter((n) => { if (seen.has(n.url)) return false; seen.add(n.url); return true })
+            .map((n) => ({ ...n, id: novelIdFromUrl(n.url) }))
+          // Fix activeNovelId to match the new ID format
+          const activeUrl = novels.find((n) => n.id === s.activeNovelId)?.url
+          return {
+            ...s,
+            savedNovels: deduped,
+            activeNovelId: activeUrl ? novelIdFromUrl(activeUrl) : s.activeNovelId,
+          }
+        }
+        return persistedState
+      },
       // Persist view state so the reader page survives a reload
       // Also persist library + settings + finished chapters; NOT transient reader state
       partialize: (state) => ({
