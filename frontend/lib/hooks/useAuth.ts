@@ -2,7 +2,8 @@
 
 import { useEffect, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
-import { useAppStore } from '@/lib/store'
+import { useAppStore, novelIdFromUrl } from '@/lib/store'
+import type { SavedNovel, TocData } from '@/lib/types'
 
 /**
  * Subscribes to Supabase auth state changes and syncs them into Zustand.
@@ -30,12 +31,17 @@ export function useAuth() {
           supabaseEmail: session.user.email ?? null,
           syncStatus: 'syncing',
         })
-        try {
-          await migrateGuestStateToSupabase(session.user.id)
-          setAuthState({ syncStatus: 'synced' })
-        } catch {
-          setAuthState({ syncStatus: 'offline' })
-        }
+        // Separate try/catch: migration failure must NOT block the cloud pull.
+          // If push fails (e.g. offline), we still want to restore cloud data.
+          try {
+            await migrateGuestStateToSupabase(session.user.id)
+          } catch { /* best-effort — local data may not have uploaded */ }
+          try {
+            await loadUserDataFromSupabase(session.user.id)
+            setAuthState({ syncStatus: 'synced' })
+          } catch {
+            setAuthState({ syncStatus: 'offline' })
+          }
       }
     })
 
@@ -49,8 +55,13 @@ export function useAuth() {
             supabaseEmail: session.user.email ?? null,
             syncStatus: 'syncing',
           })
+          // Separate try/catch: migration failure must NOT block the cloud pull.
+          // If push fails (e.g. offline), we still want to restore cloud data.
           try {
             await migrateGuestStateToSupabase(session.user.id)
+          } catch { /* best-effort — local data may not have uploaded */ }
+          try {
+            await loadUserDataFromSupabase(session.user.id)
             setAuthState({ syncStatus: 'synced' })
           } catch {
             setAuthState({ syncStatus: 'offline' })
@@ -115,4 +126,37 @@ async function migrateGuestStateToSupabase(userId: string) {
       { onConflict: 'user_id,chapter_url' }
     )
   }
+}
+
+// ─── Cloud → Local hydration ──────────────────────────────
+
+async function loadUserDataFromSupabase(userId: string) {
+  // Fetch all novels belonging to this user
+  const { data: novelRows } = await supabase
+    .from('novels')
+    .select('url, title, cover_url, total_chapters, toc, added_at, last_chapter_url, last_chapter_title')
+    .eq('user_id', userId)
+
+  // Fetch all finished chapter URLs
+  const { data: progressRows } = await supabase
+    .from('reading_progress')
+    .select('chapter_url')
+    .eq('user_id', userId)
+    .eq('is_finished', true)
+
+  const cloudNovels: SavedNovel[] = (novelRows ?? []).map((row) => ({
+    id: novelIdFromUrl(row.url),
+    url: row.url,
+    title: row.title,
+    coverUrl: row.cover_url,
+    totalChapters: row.total_chapters,
+    addedAt: new Date(row.added_at).getTime(),
+    lastChapterUrl: row.last_chapter_url,
+    lastChapterTitle: row.last_chapter_title,
+    toc: row.toc as TocData,
+  }))
+
+  const cloudFinishedUrls: string[] = (progressRows ?? []).map((r) => r.chapter_url)
+
+  useAppStore.getState().mergeCloudData(cloudNovels, cloudFinishedUrls)
 }
