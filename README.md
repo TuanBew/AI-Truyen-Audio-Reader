@@ -10,7 +10,6 @@ reading position to the cloud.
 - Sentence-by-sentence synthesis (4 GB VRAM safe with local XTTS-v2)
 - Cloud sync via Supabase — resume from exact sentence on any device
 - TTS providers: Google Gemini · OpenAI · MiniMax · Local XTTS-v2 · Google Translate
-- Email/Password + Google OAuth authentication
 - Guest mode — no account required; sign in to enable cloud sync
 
 ## Quick Start
