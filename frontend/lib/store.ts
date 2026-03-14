@@ -33,7 +33,7 @@ const defaultTTSSettings: TTSSettings = {
 };
 
 /** Derive a stable ID from a novel URL */
-function novelIdFromUrl(url: string): string {
+export function novelIdFromUrl(url: string): string {
   try {
     return btoa(url).replace(/[^a-zA-Z0-9]/g, "").slice(0, 32);
   } catch {
@@ -89,6 +89,9 @@ interface AppStore extends AppState {
   // Auth (transient — not persisted)
   authState: AuthState;
   setAuthState: (auth: Partial<AuthState>) => void;
+
+  // Cloud sync
+  mergeCloudData: (cloudNovels: SavedNovel[], cloudFinishedUrls: string[]) => void
 
   // Sentence queue
   setSentences: (sentences: string[]) => void;
@@ -306,6 +309,20 @@ export const useAppStore = create<AppStore>()(
         set((state) => ({
           authState: { ...state.authState, ...auth },
         })),
+
+      // ── Cloud sync ────────────────────────────────────────
+      mergeCloudData: (cloudNovels: SavedNovel[], cloudFinishedUrls: string[]) =>
+        set((s) => {
+          // Local wins on conflict: only add novels that don't exist locally yet
+          const existingUrls = new Set(s.savedNovels.map((n) => n.url))
+          const newNovels = cloudNovels.filter((n) => !existingUrls.has(n.url))
+          // Union finished chapters (a chapter once finished stays finished)
+          const mergedFinished = [...new Set([...s.finishedChapterUrls, ...cloudFinishedUrls])]
+          return {
+            savedNovels: [...s.savedNovels, ...newNovels],
+            finishedChapterUrls: mergedFinished,
+          }
+        }),
 
       // ── Sentence queue ────────────────────────────────────
       setSentences: (sentences: string[]) =>
