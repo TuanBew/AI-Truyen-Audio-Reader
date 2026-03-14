@@ -1,0 +1,45 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    # Reads OPENAI_API_KEY, MINIMAX_*, XTTS_ENDPOINT, SCRAPER_RATE_LIMIT from backend/.env
+    env_file: ./backend/.env
+    environment:
+      # Override to point at Docker-exposed frontend (for CORS)
+      FRONTEND_ORIGIN: http://localhost:3000
+      # Credentials are mounted below — override the path for the container
+      GOOGLE_APPLICATION_CREDENTIALS: /app/credentials/service_account.json
+    volumes:
+      # Google Cloud TTS service account — mount read-only, never bake into image
+      - ./backend/credentials:/app/credentials:ro
+      # Audio files saved by the app persist across container restarts.
+      # IMPORTANT: In the app's Settings panel, set the save directory to /audio
+      # so recorded files land inside this volume instead of an ephemeral path.
+      - audio_output:/audio
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Read from root .env (Docker Compose auto-loads .env for substitution)
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+        # Set at build time so the routes-manifest.json rewrite destination is correct
+        BACKEND_URL: http://backend:8000
+    ports:
+      - "3000:3000"
+    environment:
+      # Also set at runtime so Next.js standalone server.js sees it on startup
+      BACKEND_URL: http://backend:8000
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  # Named volume — survives `docker compose down`, deleted only by `docker compose down -v`
+  audio_output:
