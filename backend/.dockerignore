@@ -1,0 +1,15 @@
+__pycache__
+*.pyc
+*.pyo
+.venv
+venv
+.env
+.env.*
+tests/
+*.md
+.git
+.gitignore
+Dockerfile
+.dockerignore
+.audio_state.json
+credentials/
