@@ -16,8 +16,8 @@ import ResizableHDivider from './ResizableHDivider'
 
 const SIDEBAR_MIN = 180
 const SIDEBAR_MAX = 440
-const PLAYER_MIN = 130
-const PLAYER_MAX = 340
+const PLAYER_MIN = 150
+const PLAYER_MAX = 540
 
 export default function MainLayout() {
   const { view, setView, settingsPanelOpen, toggleSettingsPanel } = useAppStore()
@@ -29,9 +29,10 @@ export default function MainLayout() {
   })
 
   const [playerHeight, setPlayerHeight] = useState(() => {
-    if (typeof window === 'undefined') return 160
+    if (typeof window === 'undefined') return 300
     const parsed = parseInt(localStorage.getItem('player-height') ?? '', 10)
-    return isNaN(parsed) ? 160 : parsed
+    // If stored value is too small to show both panels, use new default
+    return isNaN(parsed) || parsed < 200 ? 300 : parsed
   })
 
   useEffect(() => { localStorage.setItem('sidebar-width', String(sidebarWidth)) }, [sidebarWidth])

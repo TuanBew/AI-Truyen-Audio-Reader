@@ -119,6 +119,7 @@ export const useAppStore = create<AppStore>()(
       activeNovelId: null,
       savedNovels: [],
       finishedChapterUrls: [],
+      autoAdvance: false,
 
       novelUrl: "",
       toc: null,
@@ -138,7 +139,6 @@ export const useAppStore = create<AppStore>()(
         providerUsed: null,
         fallbackUsed: false,
         fallbackReason: "",
-        autoAdvance: false,
         highlightedWordIndex: -1,
       },
       recordingState: {
@@ -261,8 +261,7 @@ export const useAppStore = create<AppStore>()(
             fallbackReason: reason,
           },
         })),
-      setAutoAdvance: (v) =>
-        set((s) => ({ playerState: { ...s.playerState, autoAdvance: v } })),
+      setAutoAdvance: (v) => set({ autoAdvance: v }),
       setHighlightedWordIndex: (idx) =>
         set((s) => ({ playerState: { ...s.playerState, highlightedWordIndex: idx } })),
 
@@ -423,6 +422,7 @@ export const useAppStore = create<AppStore>()(
         activeNovelId: state.activeNovelId,
         savedNovels: state.savedNovels,
         finishedChapterUrls: state.finishedChapterUrls,
+        autoAdvance: state.autoAdvance,
         ttsSettings: state.ttsSettings,
         recordingState: {
           saveDirectory: state.recordingState.saveDirectory,

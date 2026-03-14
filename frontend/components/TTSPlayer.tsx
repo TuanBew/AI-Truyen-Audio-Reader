@@ -43,6 +43,7 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
   const {
     ttsSettings,
     playerState,
+    autoAdvance,
     wordTimings,
     setPlaying,
     setAutoAdvance,
@@ -464,16 +465,16 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
 
       <div className="flex items-center gap-3">
         {/* Controls */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
           {/* Replay */}
           <button
             onClick={handleReplay}
             disabled={sentences.length === 0}
             title="Phát lại từ đầu"
-            className="p-1.5 rounded transition-colors disabled:opacity-40"
-            style={{ color: '#a78bfa' }}
+            className="p-1.5 rounded-lg transition-all disabled:opacity-30 disabled:cursor-not-allowed hover:bg-violet-900/30"
+            style={{ color: '#a78bfa', border: '1px solid rgba(124,58,237,0.2)' }}
           >
-            <RefreshCw size={14} />
+            <RefreshCw size={13} />
           </button>
 
           {/* Prev sentence */}
@@ -481,21 +482,38 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
             onClick={() => seekToSentence(currentSentenceIndex - 1)}
             disabled={currentSentenceIndex <= 0}
             title="Câu trước"
-            className="p-1.5 rounded transition-colors disabled:opacity-40"
-            style={{ color: '#a78bfa' }}
+            className="p-1.5 rounded-lg transition-all disabled:opacity-30 disabled:cursor-not-allowed hover:bg-violet-900/30"
+            style={{ color: '#a78bfa', border: '1px solid rgba(124,58,237,0.2)' }}
           >
-            <SkipBack size={14} />
+            <SkipBack size={13} />
           </button>
 
           {/* Play / Pause */}
           <button
             onClick={handlePlayPause}
             disabled={isLoading || sentences.length === 0}
-            className="flex items-center justify-center w-10 h-10 rounded-full transition-colors"
+            className="flex items-center justify-center w-10 h-10 rounded-full transition-all"
             style={
               isLoading || sentences.length === 0
-                ? { background: 'rgba(124,58,237,0.2)', color: '#6d6d9a', cursor: sentences.length === 0 ? 'default' : 'wait' }
-                : { background: '#7c3aed', color: '#fff', boxShadow: '0 0 12px rgba(124,58,237,0.5)' }
+                ? {
+                    background: 'rgba(124,58,237,0.12)',
+                    color: '#6d6d9a',
+                    border: '2px solid rgba(124,58,237,0.2)',
+                    cursor: sentences.length === 0 ? 'default' : 'wait',
+                  }
+                : playerState.isPlaying
+                ? {
+                    background: '#7c3aed',
+                    color: '#fff',
+                    border: '2px solid #a78bfa',
+                    boxShadow: '0 0 18px rgba(124,58,237,0.7), 0 0 36px rgba(124,58,237,0.25)',
+                  }
+                : {
+                    background: 'rgba(124,58,237,0.15)',
+                    color: '#a78bfa',
+                    border: '2px solid rgba(124,58,237,0.5)',
+                    boxShadow: '0 0 8px rgba(124,58,237,0.2)',
+                  }
             }
             title={playerState.isPlaying ? "Dừng" : "Phát"}
           >
@@ -513,20 +531,20 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
             onClick={() => seekToSentence(currentSentenceIndex + 1)}
             disabled={currentSentenceIndex >= sentences.length - 1}
             title="Câu tiếp"
-            className="p-1.5 rounded transition-colors disabled:opacity-40"
-            style={{ color: '#a78bfa' }}
+            className="p-1.5 rounded-lg transition-all disabled:opacity-30 disabled:cursor-not-allowed hover:bg-violet-900/30"
+            style={{ color: '#a78bfa', border: '1px solid rgba(124,58,237,0.2)' }}
           >
-            <SkipForward size={14} />
+            <SkipForward size={13} />
           </button>
 
           {/* Stop */}
           <button
             onClick={handleStop}
-            className="p-1.5 rounded transition-colors"
-            style={{ color: '#a78bfa' }}
+            className="p-1.5 rounded-lg transition-all hover:bg-violet-900/30"
+            style={{ color: '#a78bfa', border: '1px solid rgba(124,58,237,0.2)' }}
             title="Dừng hẳn"
           >
-            <Square size={14} />
+            <Square size={13} />
           </button>
         </div>
 
@@ -611,19 +629,45 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
           )
         )}
 
-        {/* Auto-advance toggle */}
-        <label
-          className="flex items-center gap-1.5 text-xs cursor-pointer select-none"
-          style={{ color: playerState.autoAdvance ? '#a78bfa' : '#6d6d9a' }}
+        {/* Auto-advance toggle switch */}
+        <button
+          onClick={() => setAutoAdvance(!autoAdvance)}
+          className="flex items-center gap-1.5 select-none"
+          title="Tự động chuyển chương khi hết"
         >
-          <input
-            type="checkbox"
-            checked={playerState.autoAdvance}
-            onChange={(e) => setAutoAdvance(e.target.checked)}
-            className="accent-violet-500"
-          />
-          Tự chuyển
-        </label>
+          <span
+            className="text-xs transition-colors"
+            style={{ color: autoAdvance ? '#c4b5fd' : '#6d6d9a' }}
+          >
+            Tự chuyển
+          </span>
+          {/* Toggle pill */}
+          <div
+            className="relative flex-shrink-0"
+            style={{
+              width: '30px',
+              height: '17px',
+              borderRadius: '9px',
+              background: autoAdvance ? 'rgba(124,58,237,0.75)' : 'rgba(124,58,237,0.12)',
+              border: `1px solid ${autoAdvance ? 'rgba(167,139,250,0.7)' : 'rgba(124,58,237,0.25)'}`,
+              boxShadow: autoAdvance ? '0 0 8px rgba(124,58,237,0.5)' : 'none',
+              transition: 'all 0.2s',
+            }}
+          >
+            <div
+              style={{
+                width: '11px',
+                height: '11px',
+                borderRadius: '50%',
+                background: autoAdvance ? '#fff' : '#6d6d9a',
+                position: 'absolute',
+                top: '2px',
+                left: autoAdvance ? '15px' : '2px',
+                transition: 'left 0.2s, background 0.2s',
+              }}
+            />
+          </div>
+        </button>
       </div>
 
       {/* Audio visualizer */}

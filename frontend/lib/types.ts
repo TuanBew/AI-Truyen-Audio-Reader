@@ -65,7 +65,6 @@ export interface PlayerState {
   providerUsed: TTSProvider | null;
   fallbackUsed: boolean;
   fallbackReason: string;
-  autoAdvance: boolean;
   /** Index of currently highlighted word (-1 = none) */
   highlightedWordIndex: number;
 }
@@ -123,6 +122,9 @@ export interface AppState {
   // View / navigation
   view: AppView;
   activeNovelId: string | null;
+
+  // Persisted user preference (outside playerState so it survives reloads)
+  autoAdvance: boolean;
 
   // Novel library (persisted)
   savedNovels: SavedNovel[];
