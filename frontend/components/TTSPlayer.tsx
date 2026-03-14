@@ -267,11 +267,17 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
 
   const seekToSentence = useCallback(
     async (index: number) => {
-      abortAllPrefetches(); // cancel all in-flight fetches immediately
-      pendingRef.current.clear(); // discard stale in-flight promises
+      // Pause immediately — pause() does NOT fire the 'ended' event, so the
+      // old sentence cannot race with the incoming one while synthesis is in flight.
+      if (audioRef.current) {
+        audioRef.current.pause();
+      }
+      setPlaying(false);
+      abortAllPrefetches();
+      pendingRef.current.clear();
       await playSentence(index);
     },
-    [abortAllPrefetches, playSentence]
+    [abortAllPrefetches, playSentence, setPlaying]
   );
 
   const handlePlayPause = () => {
@@ -355,47 +361,30 @@ export default function TTSPlayer({ text, chapterTitle, chapterUrl, onEnded }: P
     }
   };
 
-  const handleSentenceEnded = useCallback(() => {
-    const { sentences: currentSentences, currentSentenceIndex: curIdx } =
-      useAppStore.getState().sentenceQueue;
-    const nextIndex = curIdx + 1;
-    const isLastSentence = curIdx >= currentSentences.length - 1;
-
-    if (isLastSentence) {
-      // Chapter complete — fall through to handleEnded logic
-      return;
-    }
-
-    playSentence(nextIndex);
-  }, [playSentence]);
-
   const handleEnded = useCallback(() => {
-    // If we're in sentence mode and there's a next sentence, let handleSentenceEnded manage it
-    const { sentences: currentSentences, currentSentenceIndex: curIdx } =
+    const { sentences: sents, currentSentenceIndex: curIdx } =
       useAppStore.getState().sentenceQueue;
-    const isInSentenceMode = currentSentences.length > 0 && curIdx >= 0;
-    const isLastSentence = curIdx >= currentSentences.length - 1;
 
-    if (isInSentenceMode && !isLastSentence) {
-      handleSentenceEnded();
+    // Advance to the next sentence if there is one.
+    // Read from the store at call-time (not from closure) so the index is always fresh.
+    if (sents.length > 0 && curIdx >= 0 && curIdx < sents.length - 1) {
+      playSentence(curIdx + 1);
       return;
     }
 
-    // Original handleEnded logic
+    // Chapter complete — either curIdx is the last sentence, or no sentence mode.
     setPlaying(false);
-    // Mark all words highlighted on complete playback
     if (wordTimings.length > 0) {
       setHighlightedWordIndex(wordTimings.length - 1);
     }
-    // Mark chapter finished if not already
     if (!markedFinishedRef.current) {
       markedFinishedRef.current = true;
       markChapterFinished(chapterUrl);
     }
-    // Auto-advance fires here — only when audio truly ends
+    // Trigger auto-advance (or any other onEnded logic) in the parent.
     onEnded?.();
   }, [
-    handleSentenceEnded,
+    playSentence,
     setPlaying,
     wordTimings,
     setHighlightedWordIndex,
