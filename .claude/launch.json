@@ -4,7 +4,7 @@
     {
       "name": "m0-spikes",
       "runtimeExecutable": "python",
-      "runtimeArgs": ["-m", "http.server", "8765", "--directory", "spikes/m0"],
+      "runtimeArgs": ["-m", "http.server", "8765", "--bind", "127.0.0.1", "--directory", "spikes/m0"],
       "port": 8765
     }
   ]

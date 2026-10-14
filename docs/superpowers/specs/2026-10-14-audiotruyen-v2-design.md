@@ -19,7 +19,7 @@ AudioTruyen v2 is a **private, single-user** web app for reading and listening t
 | Primary usage | Desktop, reading while listening. Sentence/segment highlight is the core experience. PWA/offline is a non-goal. |
 | Voice | Multi-voice: narrator + per-character dialogue voices (male/female defaults, per-character overrides). Default Southern presets: narrator "Đức Trí", male "Thái Sơn", female "Mỹ Duyên". |
 | Speaker attribution | Three pluggable strategies, chained: cloud LLM (Gemini free tier) → local LLM (llama.cpp, CPU) → heuristic. |
-| Emotion | Layered: LLM labels emotion per segment → VieNeu clones from a per-emotion reference clip only for the (voice, emotion) pairs validated in spike S1, neutral ref elsewhere → prosody post-processing. Non-verbal tags dropped (S1). |
+| Emotion | Layered: LLM labels emotion per segment → VieNeu clones from a per-emotion reference clip only for the (voice, emotion) pairs enabled after spike S1 (narrator/angry, male/angry, male/whisper; female/happy and female/sad **provisional** until the M4 re-test). Every other segment, including `neutral`, is spoken by the preset voice itself (`voice=` preset id, no clone; the VoxCPM2 neutral clip is not used) → prosody post-processing. Non-verbal tags dropped (S1). |
 | TTS engine | VieNeu-TTS v3 Turbo (Apache-2.0), local, CUDA by default (verified in S3); ONNX CPU fallback must be verified in M2. |
 | Audio storage | Cloudflare R2. Fallback when worker is offline: Microsoft Edge TTS, single voice, not persisted. |
 | Sources | `SourceAdapter` interface; v2 ships the truyenfull adapter only. |
@@ -31,7 +31,7 @@ AudioTruyen v2 is a **private, single-user** web app for reading and listening t
 
 ### Hardware constraint
 
-Worker host: Windows 11 laptop, NVIDIA GTX 1650 Max-Q **4 GB VRAM**. Only one model may hold VRAM at a time. The local LLM runs on CPU. VieNeu v3 Turbo measured ~1.37 GB torch peak VRAM on the GTX 1650 (spike S3). Its ONNX CPU path (published as ~2x realtime) did not load in S3, so running without a GPU stays unverified until M2 re-benchmarks it.
+Worker host: Windows 11 laptop, NVIDIA GTX 1650 Max-Q **4 GB VRAM**. Only one model may hold VRAM at a time. The local LLM runs on CPU. VieNeu v3 Turbo measured 1369.9 MiB (≈1.34 GiB) torch peak VRAM on the GTX 1650 (spike S3; allocator peak, excludes CUDA context). Its ONNX CPU path (published as ~2x realtime) did not load in S3, so running without a GPU stays unverified until M2 re-benchmarks it.
 
 ### Non-goals (v2)
 
@@ -63,7 +63,7 @@ Personal-use note: reading the HTML skips the site's ad monetization. This is ac
 
 | Model | License | Vietnamese | Fit for 4 GB | Emotion control | Verdict |
 |---|---|---|---|---|---|
-| VieNeu-TTS v3 Turbo | Apache-2.0 | Native, 3 dialects, 23-25 presets, cloning from 3-8 s | Yes. Verified on GTX 1650 (S3): sequential RTF 0.22, batch RTF 0.13, first sentence 0.52 s, ~1.37 GB torch peak VRAM. ONNX CPU (published ~2x realtime) not verified. | Experimental tags `[cười]` `[thở dài]` `[hắng giọng]` (dropped after S1: `[cười]` broken, `[thở dài]` inaudible); style follows the reference clip | **Chosen** |
+| VieNeu-TTS v3 Turbo | Apache-2.0 | Native, 3 dialects, 23-25 presets, cloning from 3-8 s | Yes. Verified on GTX 1650 (S3): sequential RTF 0.22, batch RTF 0.13, first sentence 0.52 s, 1369.9 MiB (≈1.34 GiB) torch peak VRAM (presets only; clone RTF re-measured in M2). ONNX CPU (published ~2x realtime) not verified. | Experimental non-verbal tags exist but are not used (S1: one broken, one inaudible); style follows the reference clip for the enabled pairs (5.10) | **Chosen** |
 | VoxCPM2 | Apache-2.0 | Official, 30 languages | No (~8 GB VRAM) | Voice Design from text description, style tags | Used **once** offline (Colab/Kaggle) to generate emotion reference clips |
 | F5-TTS Vietnamese | CC-BY-NC | Yes | Borderline | Via reference | Rejected (non-commercial, heavier) |
 | Fish Audio S2 Pro | Non-commercial | Yes | No (4B + 400M) | Best | Rejected |
@@ -89,9 +89,10 @@ Personal-use note: reading the HTML skips the site's ad monetization. This is ac
                 │ RLS) + Realtime               │ in Vercel env only)
 ┌───────────────▼──────────────┐      ┌────────▼────────────────┐
 │ Supabase (ap-southeast-1)    │      │ Cloudflare R2 (private)  │
-│ Postgres, Auth, Realtime     │      │ audio chunks + manifests │
-│ jobs queue, worker_status    │      └────────▲────────────────┘
-└───────────────▲──────────────┘               │ S3 PUT
+│ Postgres, Auth, Realtime     │      │ audio: init + cluster    │
+│ jobs queue, worker_status    │      │ segments + full.webm     │
+└───────────────▲──────────────┘      └────────▲────────────────┘
+                │                              │ S3 PUT
                 │ outbound only (service role)  │
 ┌───────────────┴───────────────────────────────┴────────────────┐
 │ worker/ (owner's Windows laptop, Python 3.12 + uv)             │
@@ -163,8 +164,13 @@ characters (
 
 voices (
   id uuid pk, name text, kind text check in ('preset','clone'),
-  preset_name text null,                       -- VieNeu preset id
-  refs jsonb,                                  -- { "neutral": "r2-key", "angry": "r2-key", ... }
+  preset_name text null,                       -- VieNeu preset id; neutral playback (and every non-enabled
+                                               -- emotion) = infer(voice=preset_name), no clone
+  refs jsonb,                                  -- { "<emotion>": { "key": "voices/{id}/{emotion}.wav",
+                                               --   "enabled": bool, "provisional": bool } }
+                                               -- keys: emotions of 4.1 except "neutral" for kind='preset';
+                                               -- kind='clone' voices also need "neutral" (no preset to fall
+                                               -- back to). A ref is used only when "enabled" is true (5.10).
   gender text, is_default_narrator bool, is_default_male bool, is_default_female bool
 )
 
@@ -184,6 +190,8 @@ chapter_audio (
   id uuid pk, chapter_id fk, voice_hash text,
   status text check in ('queued','partial','ready','failed'),
   provider text,                               -- 'vieneu'
+  attempt int not null default 1,              -- synthesis run number; a re-run increments it and resets
+                                               -- init_key/chunks/full_key/duration_ms (4.3, 5.1)
   init_key text null,                          -- shared WebM init segment (init.webm)
   chunks jsonb,                                -- [{ key, start_ms, end_ms }]: cluster media segments of one
                                                -- continuous encode, times read from the muxed stream (5.6)
@@ -237,18 +245,20 @@ settings (user_id pk, data jsonb, updated_at)  -- see 7.1 / 6.4
 
 ### 4.2 voice_hash
 
-`sha256(narrator_voice_id, default_male_id, default_female_id, sorted(character→voice overrides for this novel), lexicon_version, pipeline_version)[:16]`. Changing voices or the lexicon produces a new hash; old audio is kept until garbage-collected (R2 objects whose `chapter_audio` row is older than 30 days and not the current hash).
+`sha256(narrator_voice_id, default_male_id, default_female_id, sorted(character→voice overrides for this novel), lexicon_version, pipeline_version)[:16]`. Changing voices or the lexicon produces a new hash; old audio is kept until garbage-collected. GC deletes R2 objects (a) whose `chapter_audio` row is older than 30 days and not the current hash, and (b) under an `{attempt}` prefix other than the row's current `attempt` (abandoned attempts, 4.3) once that attempt is superseded.
 
 ### 4.3 R2 key layout
 
 ```
-audio/{novel_id}/{chapter_id}/{voice_hash}/init.webm
-audio/{novel_id}/{chapter_id}/{voice_hash}/seg-{0000}.webm
-audio/{novel_id}/{chapter_id}/{voice_hash}/full.webm
+audio/{novel_id}/{chapter_id}/{voice_hash}/{attempt}/init.webm
+audio/{novel_id}/{chapter_id}/{voice_hash}/{attempt}/seg-{0000}.webm
+audio/{novel_id}/{chapter_id}/{voice_hash}/{attempt}/full.webm
 voices/{voice_id}/{emotion}.wav
 ```
 
-`init.webm` is the shared init segment and `seg-{0000}.webm` are the cluster media segments of one continuous encode per chapter (spike S2). `full.webm` = `init.webm` + all `seg-*` in order.
+`init.webm` is the shared init segment and `seg-{0000}.webm` are the cluster media segments of one continuous encode per chapter (spike S2). `{attempt}` is `chapter_audio.attempt`: a re-run never overwrites objects of an earlier attempt (VieNeu has no seed, so a re-run produces different audio and different cluster cuts), and the player only reads keys of the row's current attempt.
+
+`full.webm` is **not** the raw concatenation: live (`-live 1`) output has no Duration and no Cues, so it is not seekable. On completion the worker writes `init.webm` + all `seg-*` in order to a temporary `concat.webm` and remuxes it to a file (not a pipe, so the muxer can write Duration and Cues): `ffmpeg -i concat.webm -c copy full.webm`, then uploads `full.webm`.
 
 ---
 
@@ -262,6 +272,7 @@ voices/{voice_id}/{emotion}.wav
 - One job at a time. Lease 5 min, extended by heartbeat.
 - Failure: `attempts < max_attempts` → `queued` with `run_after = now() + 2^attempts min`; else `failed` with a human-readable `error`.
 - `synthesize` jobs whose `voice_hash` no longer matches the current settings are marked `cancelled` without work.
+- `synthesize` re-runs (lease expiry after a crash, retry after failure): if a `chapter_audio` row for `(chapter_id, voice_hash)` exists and is not `ready`, the worker increments its `attempt`, resets `init_key`, `chunks`, `full_key` and `duration_ms` to null/empty, sets `status='queued'`, and writes all new objects under the new `{attempt}` prefix (4.3). It never resumes or overwrites a previous attempt. Objects of abandoned attempts are removed by GC (4.2).
 
 ### 5.2 SourceAdapter
 
@@ -277,7 +288,7 @@ class SourceAdapter(Protocol):
 Truyenfull adapter:
 - `httpx` with a desktop browser User-Agent, ~1 req/s with 0.3-0.8 s jitter, retries with backoff on 5xx/timeouts.
 - TOC: paginate the novel's chapter list until exhausted; implementation must inspect the live pagination (page links or AJAX) and record fixtures.
-- Chapter: parse `#chapter-c`, drop `#ads-chapter-top` and any `ads-*` descendants, convert `<br>` to line breaks, strip the trailing SEO keyword block.
+- Chapter: parse `#chapter-c`, drop descendant elements whose `id` or any class **starts with** `ads` (prefix match, e.g. `#ads-chapter-top`; never a substring match, which would also hit words like `roads`), convert `<br>` to line breaks, strip the trailing SEO keyword block with a pattern **anchored to the end of the text** (a match in the middle of the chapter is never removed). Carried to M2 from the M0 review.
 - Validation: raise `ParserBroken` if text is empty or under 500 chars for a chapter whose title is present; raise `SourceBlocked` on Cloudflare challenge markers or HTTP 403/503 with challenge body.
 
 ### 5.3 Text pipeline
@@ -285,7 +296,7 @@ Truyenfull adapter:
 1. **Normalize** (TTS input only; display text stays original): Unicode NFC; de-obfuscate dotted words (`c.h.ử.i` → `chửi`, regex for single Vietnamese letters separated by dots); numbers, dates, units, abbreviations via VietNormalizer; then lexicon rules (global by `position`, then novel-level). Each transformation keeps an offset map back to original text.
 2. **Segment**: split paragraphs; within paragraphs separate dialogue (`"..."`, `“...”`, lines starting with `-`/`–`) from narration; split segments over ~250 chars at sentence boundaries. Each segment records its `src` range in original text.
 3. **Analyze** (speaker, gender, emotion, intensity) via strategy chain (5.4). Cached in `chapter_analysis`.
-4. **Resolve voice**: narration → narrator voice; dialogue → character's voice, else default by gender, else default narrator-alt. Then pick the voice's reference clip for the segment's emotion if that (voice, emotion) pair is enabled (5.10); otherwise fall back to `neutral`.
+4. **Resolve voice**: narration → narrator voice; dialogue → character's voice, else default by gender, else default narrator-alt. Then, if the voice has an **enabled** ref for the segment's emotion (5.10), clone from that clip (`infer(ref_audio=...)`); otherwise, including every `neutral` segment, speak with the preset voice itself (`infer(voice=preset_name)`, no clone). Only `kind='clone'` voices use a `neutral` ref clip.
 
 ### 5.4 Speaker/emotion strategies
 
@@ -321,11 +332,21 @@ class TTSProvider(Protocol):
                    intensity: float) -> np.ndarray: ...   # float32 mono @ provider rate
 ```
 
-- `vieneu` provider: VieNeu v3 Turbo; default device `cuda` (spike S3 on the GTX 1650: sequential RTF 0.22, batch RTF 0.13, first sentence 0.52 s). The ONNX CPU fallback is used only when CUDA is unavailable and is unverified: S3 could not load the ONNX model (huggingface_hub 2.x symlinked cache fails onnxruntime's external-data path check). M2 must load the ONNX model from a real `local_dir` (or pin `huggingface_hub<1.0`) and re-benchmark CPU RTF before relying on it. Clones from the selected reference clip. Sampling via `infer(temperature=...)` (v3 Turbo default `0.8`; no seed parameter): `0.8` for neutral, up to `0.95` scaled by intensity for expressive segments.
-- Per segment: retry once on failure; then retry with the `neutral` ref; then with the default narrator preset; record a warning. A segment never blocks the chapter.
-- Quality guard per segment: VieNeu output noise varies per sample and per preset. The worker measures the 4-12 kHz / 0-4 kHz energy ratio in vowel frames and re-synthesizes outliers (max 2 retries).
+- `vieneu` provider: VieNeu v3 Turbo; default device `cuda` (spike S3 on the GTX 1650: sequential RTF 0.22, batch RTF 0.13, first sentence 0.52 s). The ONNX CPU fallback is used only when CUDA is unavailable and is unverified: S3 could not load the ONNX model (huggingface_hub 2.x symlinked cache fails onnxruntime's external-data path check). M2 must load the ONNX model from a real `local_dir` (or pin `huggingface_hub<1.0`) and re-benchmark CPU RTF before relying on it. Speaks with `voice=preset_name` by default and clones from an emotion ref only for enabled pairs (5.3 step 4, 5.10). S3 measured presets only; M2 re-measures RTF with `ref_audio` cloning (`infer_batch` takes one `ref_audio`, so it cannot batch segments that use different refs). Sampling via `infer(temperature=...)` (v3 Turbo default `0.8`; no seed parameter): `0.8` for neutral, up to `0.95` scaled by intensity for expressive segments.
+- Per segment: retry once on failure; then retry with the voice's preset without a ref (`voice=preset_name`); then with the default narrator preset; record a warning. A segment never blocks the chapter.
+- Quality guard per segment (metric defined in the M0 results doc, "S1 female-noise debug"): VieNeu output noise varies per sample and per preset. Metric: mono 48 kHz; 40 ms Hann frames, hop 20 ms; keep frames with RMS ≥ 0.03 and zero-crossing rate ≤ 0.06 (vowel-like); per frame ratio = power(4-12 kHz) / power(0-4 kHz); segment value = median over kept frames. Threshold (starting value, tune in M2): re-synthesize the segment if its median ratio > 2.5 × the voice's baseline, where baseline = the same median measured over that preset's neutral reference audio (the preset's own neutral output, e.g. `assets/voice-refs/m0/base/*.wav`). Max 2 retries; keep the take with the lowest ratio. Segments with no kept frames skip the guard.
 - Post-processing per segment: trim leading/trailing silence, loudness-normalize, append an emotion-dependent pause (neutral 250 ms, sad/tender 450 ms, angry/shout 150 ms; paragraph end +200 ms).
-- Encoding (spike S2): one continuous ffmpeg/libopus process per chapter (WebM/Opus 48 kbps, `-f webm -live 1`, `-cluster_time_limit` ≈ 30 s), fed segment PCM in order. The worker uploads `init.webm` first, then each cluster as `seg-{0000}.webm` as soon as it is emitted, appends it to `chapter_audio.chunks`, and sets `status='partial'`. Cluster cut points and `start_ms`/`end_ms` are read from the muxed stream (ffmpeg cuts about 19 ms before the limit); the worker never assumes cluster N == text chunk N. On completion, `full.webm` = init + all clusters; set `ready`, `duration_ms`, final `segments`.
+- Encoding (spike S2): one long-lived ffmpeg/libopus process per chapter, fed segment PCM (float32 mono 48 kHz) on stdin in order, WebM read from stdout:
+
+  ```
+  ffmpeg -hide_banner -loglevel error -f f32le -ar 48000 -ac 1 -i pipe:0 \
+    -c:a libopus -b:a 48k -ar 48000 -ac 1 \
+    -f webm -live 1 -cluster_time_limit 30000 -cluster_size_limit 50000000 \
+    -flush_packets 1 pipe:1
+  ```
+
+  `-cluster_size_limit 50000000` is required: with pipe output and the default size limit, ffmpeg cuts clusters at ~32 KiB (the final review measured 25 clusters instead of 4 for 90 s of speech), so `-cluster_time_limit` alone does not control the cut. `-flush_packets 1` makes ffmpeg write each cluster to the pipe promptly instead of buffering it.
+- The worker parses the EBML stream from stdout incrementally, uploads `init.webm` (bytes before the first Cluster) first, then each cluster as `seg-{0000}.webm` as soon as it is complete, appends it to `chapter_audio.chunks`, and sets `status='partial'`. Cluster cut points and `start_ms`/`end_ms` are read from the muxed stream (ffmpeg cuts about 19 ms before the limit); the worker never assumes cluster N == text chunk N. All keys use the row's current `{attempt}` (4.3). On completion: produce the seekable `full.webm` by remux (4.3), upload it, then set `full_key`, `duration_ms`, final `segments`, `status='ready'`. Only a one-shot offline encode was validated in S2; the incremental pipe path is an M2 exit criterion (8).
 - Synthesis order is sequential so the first cluster is ready within seconds of job start.
 
 ### 5.7 Scheduler
@@ -346,10 +367,13 @@ When the web app opens or advances to chapter N, it enqueues `fetch_chapter` and
 
 ### 5.10 Emotion reference bank
 
-- Default voices (Southern VieNeu presets, owner choice in spike S1): narrator "Đức Trí", male "Thái Sơn", female "Mỹ Duyên". "Kim Thanh" was rejected for about 5x more 4-12 kHz vowel noise than the other presets.
+- Default voices (Southern VieNeu presets, owner choice in spike S1): narrator "Đức Trí", male "Thái Sơn", female "Mỹ Duyên". "Kim Thanh" was rejected for a ~5x higher 4-12 kHz / 0-4 kHz energy ratio in vowel frames than the other presets (metric in the M0 results doc, "S1 female-noise debug").
+- "Neutral" means the preset voice itself (`infer(voice=preset_name)`), not a VoxCPM2 neutral clip. Neutral refs are not used for preset voices.
 - `tools/emotion_refs.ipynb` (Colab/Kaggle GPU): VoxCPM2 controllable cloning generates 3-8 s Vietnamese clips per (voice, emotion), for the narrator, default male, and default female voices.
-- Emotion refs are enabled only for the five pairs validated in spike S1: narrator/angry, male/angry, male/whisper, female/happy, female/sad. Every other pair (including all `fearful`) falls back to the neutral ref + prosody post-processing.
-- Refs regenerated with the notebook (or new pairs) can be re-validated with the S1 listening-page approach (VoxCPM2 ref, VieNeu preset and VieNeu clone side by side, rated 0/1/2) before being enabled.
+- Validation basis archived in the repo: `assets/voice-refs/m0/` (3 preset base clips + 18 VoxCPM2 refs used in S1, sha256 in the M0 results doc). The enabled pairs below use exactly these files.
+- Emotion refs are enabled only for the five pairs rated 2 in spike S1: narrator/angry, male/angry, male/whisper (enabled), female/happy and female/sad (**provisional**: the female_neutral clone was also rated 2 against the preset, so these ratings are confounded by the VoxCPM2 timbre shift; M4 re-tests them against a clone-from-neutral-ref baseline and disables them if the emotion is not audible beyond that shift). Every other pair (including all `fearful`) uses the preset voice + prosody post-processing.
+- Known exceptions to the 3-8 s range among enabled refs: narrator_angry (2.24 s) and male_angry (2.72 s). They were validated as-is and are kept.
+- Regenerating any ref (notebook re-run, other settings or seed) voids its S1 validation: the pair stays disabled until re-tested with the S1 listening-page method (VoxCPM2 ref, VieNeu preset and VieNeu clone side by side, rated 0/1/2; enable only at 2). New pairs follow the same rule.
 - Clips are uploaded via the Settings → Voices page (or the notebook writes them directly to R2) and referenced from `voices.refs`.
 - Users may also upload their own clip per emotion. Only voices the owner has rights to may be cloned.
 
@@ -404,10 +428,12 @@ Command palette (`Ctrl+K`): search library and chapters, run commands, paste a t
 ### 6.5 Audio engine
 
 - Primary: `MediaSource` + one `SourceBuffer('audio/webm; codecs="opus"')` in `segments` mode. The player appends `init.webm` once, then the cluster media segments (`seg-*`) in order as they become available, with no `timestampOffset` or append windows; `<audio>` element provides `preservesPitch`, `playbackRate`, seeking, and Media Session integration.
-- When `full_key` exists and MSE errors, fall back to the full file.
-- Signed URLs (1 h TTL) from `GET /api/audio/[chapterAudioId]/urls`; on 403 the player refreshes URLs once.
+- When the row reaches `ready`, the player sets `mediaSource.duration` from `duration_ms` (after the last append, before `endOfStream()`). Expected buffered end ≈ duration + ~21 ms (variant C measured 30.021 s for a 30.000 s signal); the player must not treat that tail as an error.
+- The player watches `chapter_audio` via Realtime; when `attempt` changes it discards the SourceBuffer and reloads the chapter from the new attempt's `init.webm` (keeping the playback position).
+- When `full_key` exists and MSE errors, fall back to the full file (seekable remux, 4.3).
+- Signed URLs (1 h TTL) from `GET /api/audio/[chapterAudioId]/urls`, which returns URLs for `init_key`, every key in `chunks` (segments, in order) and `full_key` when present, all for the row's current `attempt`; on 403 the player refreshes URLs once.
 - Edge TTS fallback: `GET /api/fallback-tts?chapterId=&segment=` streams MP3 for one segment; player plays segments sequentially with a plain `<audio>` element; single voice; nothing persisted.
-- Spike S2 outcome (Chrome): independently encoded WebM chunks clicked audibly at boundaries in both `sequence` mode and `segments` mode with offsets + append windows, so they are rejected. Shared-init cluster segments from one continuous encode played with no click at any boundary (sine and speech) and are the chosen design. Edge/Firefox were not tested in S2.
+- Spike S2 outcome (validated in the Claude desktop browser pane, Chromium 152; owner's browser unrecorded; Edge/Firefox untested): independently encoded WebM chunks clicked audibly at boundaries in both `sequence` mode and `segments` mode with offsets + append windows, so they are rejected. Shared-init cluster segments from one continuous encode played with no click at any boundary (sine and speech) and are the chosen design. C was produced by a one-shot offline encode; the incremental pipe encode is validated in M2 (8).
 
 ### 6.6 Settings pages
 
@@ -432,8 +458,8 @@ Command palette (`Ctrl+K`): search library and chapters, run commands, paste a t
 |---|---|
 | Truyenfull markup change | `ParserBroken`: job fails with a clear message; never synthesize empty text |
 | Cloudflare block | `SourceBlocked`: backoff retries; source flagged degraded in UI |
-| Segment TTS failure | Retry → neutral ref → default preset; warning recorded; chapter continues |
-| Worker crash mid-job | Lease expiry requeues; deterministic chunk keys make re-runs idempotent |
+| Segment TTS failure | Retry → same voice preset without ref → default narrator preset; warning recorded; chapter continues |
+| Worker crash mid-job | Lease expiry requeues; the re-run increments `chapter_audio.attempt`, resets `init_key`/`chunks`, and writes under a new `{attempt}` key prefix (4.3, 5.1). Re-runs are not reproducible (VieNeu has no seed), so earlier objects are never reused or overwritten; the player reloads on `attempt` change; GC removes abandoned attempts |
 | R2 upload failure | Retry with backoff; chapter stays `partial` |
 | LLM invalid output | Next strategy in chain |
 | Gemini quota | Per-minute wait or per-day model lock; then local LLM; then heuristic |
@@ -473,15 +499,15 @@ Each milestone gets its own implementation plan (writing-plans skill).
 
 | # | Milestone | Exit criteria |
 |---|---|---|
-| M0 | Spikes | **Done** (2026-10-14). Results and decisions: `docs/superpowers/spikes/2026-10-14-m0-results.md`. S1 PASS (emotion refs for 5 validated pairs, tags dropped), S2 shared-init cluster segments PASS, S3 GPU OK (CPU unverified). |
+| M0 | Spikes | **Done** (2026-10-14). Results and decisions: `docs/superpowers/spikes/2026-10-14-m0-results.md`. S1 PASS by count rule, applied per pair (5 pairs enabled; female/happy and female/sad provisional), tags dropped; S2 shared-init cluster segments PASS (one-shot offline encode); S3 GPU OK (CPU unverified). Validation refs archived in `assets/voice-refs/m0/`. |
 | M1 | Foundation | Repo restructured, v1 removed, Supabase schema + RLS + `claim_job`, auth with single user, R2 bucket + tokens, CI green |
-| M2 | Worker core | Job loop with leases/heartbeat, truyenfull adapter with fixtures, normalize + segment, heuristic strategy, VieNeu single-voice synthesis with quality guard, continuous encoder + cluster upload, ONNX CPU load fix + CPU RTF re-benchmark, `--fake-tts` |
-| M3 | Web core | Library, novel page, reader layout A, MSE player (shared init + clusters) with highlight + auto-scroll, AudioWorklet continuity test, progress, prefetch, worker-offline state |
-| M4 | Multi-voice + emotion | Gemini strategy + rate limiter, local LLM strategy, roster merge, cast drawer + speaker reassignment, voice bank + per-pair emotion refs (5 validated pairs, neutral elsewhere; no non-verbal tags), notebook |
+| M2 | Worker core | Job loop with leases/heartbeat, truyenfull adapter with fixtures (prefix-matched `ads*` removal, end-anchored SEO strip), normalize + segment, heuristic strategy, VieNeu single-voice synthesis with quality guard (5.6 metric + threshold), RTF re-measured with `ref_audio` cloning (S3 measured presets only), ONNX CPU load fix + CPU RTF re-benchmark, `--fake-tts`. **Incremental encode validated:** per-segment PCM fed to one long-lived ffmpeg/libopus process with the 5.6 flags, clusters emitted and parsed incrementally from the pipe, uploaded as they appear, and played gaplessly through the M3 continuity test. `attempt` re-run path and seekable `full.webm` remux tested |
+| M3 | Web core | Library, novel page, reader layout A, MSE player (shared init + clusters, `duration` from `duration_ms`, reload on `attempt` change) with highlight + auto-scroll, AudioWorklet continuity test, progress, prefetch, worker-offline state |
+| M4 | Multi-voice + emotion | Gemini strategy + rate limiter, local LLM strategy, roster merge, cast drawer + speaker reassignment, voice bank + per-pair emotion refs (5 pairs from S1, preset voice elsewhere; no non-verbal tags), **female/happy + female/sad re-test** against a clone-from-neutral-ref baseline (disable if not audible beyond the timbre shift), notebook |
 | M5 | Features | Lexicon (global + novel), bookmarks + notes, stats, sleep timer, follow + scheduler, theme customizer, command palette, Edge fallback |
 | M6 | Deploy + hardening | Vercel production, NSSM service docs, README rewrite, E2E suite in CI |
 
-S1 outcome: emotion transfer from refs is audible only for some (voice, emotion) pairs, so M4 enables refs per pair (5.10) and uses the neutral ref + prosody elsewhere; non-verbal tags are dropped. A `voxcpm2` remote provider stays a possible follow-up behind `TTSProvider`.
+S1 outcome: emotion transfer from refs is audible only for some (voice, emotion) pairs, so M4 enables refs per pair (5.10) and uses the preset voice itself + prosody elsewhere; the two female pairs are provisional (timbre-shift confound); non-verbal tags are dropped. A `voxcpm2` remote provider stays a possible follow-up behind `TTSProvider`.
 S2 outcome: independently encoded chunks failed (audible splice clicks), so audio uses shared-init WebM cluster segments from one continuous encode (5.6, 6.5).
 
 ---
@@ -492,6 +518,6 @@ S2 outcome: independently encoded chunks failed (audible splice clicks), so audi
 |---|---|
 | Truyenfull changes domain/markup or tightens Cloudflare | Adapter isolation, fixtures, `ParserBroken`/`SourceBlocked` surfacing, adapter interface for new sources |
 | Gemini free tier cut further | Rate limiter at 80%, per-chapter single request, cascade to local LLM/heuristic |
-| VieNeu emotion transfer weak | Spike S1 first; provider abstraction |
+| VieNeu emotion transfer weak | Confirmed partly in S1: refs enabled per (voice, emotion) pair only, preset voice + prosody elsewhere; female pairs re-tested in M4; `voxcpm2` remote provider possible behind `TTSProvider` |
 | Laptop off for long periods | Web stays usable for cached content; Edge fallback; Supabase kept alive only while worker runs (documented) |
 | R2 free 10 GB exhausted | ~2 MB/chapter at 48 kbps ≈ 5,000 chapters; GC of stale voice_hash audio after 30 days; usage shown in Settings → Worker |
