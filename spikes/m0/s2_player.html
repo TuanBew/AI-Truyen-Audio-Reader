@@ -10,7 +10,8 @@
 <h1>S2: WebM/Opus chunks qua MediaSource</h1>
 <p>
   Bộ: <a href="?set=sine&variant=A">sine A</a> · <a href="?set=sine&variant=B">sine B</a> ·
-  <a href="?set=speech&variant=A">speech A</a> · <a href="?set=speech&variant=B">speech B</a>
+  <a href="?set=speech&variant=A">speech A</a> · <a href="?set=speech&variant=B">speech B</a> ·
+  <a href="?set=sine&variant=C">sine C</a> · <a href="?set=speech&variant=C">speech C</a>
 </p>
 <p id="info"></p>
 <audio id="audio" controls></audio>
@@ -25,7 +26,8 @@
   const params = new URLSearchParams(location.search);
   const set = params.get('set') || 'sine';
   const variant = params.get('variant') || 'A';
-  const base = `out/s2/${set}/`;
+  const base = variant === 'C' ? `out/s2/${set}-c/` : `out/s2/${set}/`;
+  const modeLabel = { A: 'sequence mode', B: 'segments + timestampOffset + appendWindow', C: 'continuous encode: init + cluster segments' };
   const audio = document.getElementById('audio');
   const log = (m) => (document.getElementById('log').textContent += m + '\n');
 
@@ -46,13 +48,17 @@
   async function run() {
     const manifest = await (await fetch(base + 'manifest.json')).json();
     document.getElementById('info').innerHTML =
-      `Bộ <code>${set}</code>, biến thể <code>${variant}</code> (${variant === 'A' ? 'sequence mode' : 'segments + timestampOffset + appendWindow'}), ` +
+      `Bộ <code>${set}</code>, biến thể <code>${variant}</code> (${modeLabel[variant]}), ` +
       `${manifest.chunks.length} khối, tổng ${manifest.total.toFixed(3)}s. Hỗ trợ: ${MediaSource.isTypeSupported('audio/webm; codecs="opus"')}`;
     const ms = new MediaSource();
     audio.src = URL.createObjectURL(ms);
     await new Promise((r) => ms.addEventListener('sourceopen', r, { once: true }));
     const sb = ms.addSourceBuffer('audio/webm; codecs="opus"');
     sb.mode = variant === 'A' ? 'sequence' : 'segments';
+    if (variant === 'C') {
+      await append(sb, await (await fetch(base + manifest.init)).arrayBuffer());
+      log(`appended ${manifest.init} (init)`);
+    }
     let offset = 0;
     for (const chunk of manifest.chunks) {
       const buf = await (await fetch(base + chunk.url)).arrayBuffer();
