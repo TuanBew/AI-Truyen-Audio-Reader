@@ -50,3 +50,9 @@ brainstorm-ui-direction.png
 screenshots/
 CLAUDE.md
 task_progress.md
+
+# M0 spikes (throwaway)
+spikes/m0/.venv-*/
+spikes/m0/out/
+spikes/m0/__pycache__/
+spikes/m0/.pytest_cache/
