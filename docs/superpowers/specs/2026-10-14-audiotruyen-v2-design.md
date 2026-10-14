@@ -17,10 +17,10 @@ AudioTruyen v2 is a **private, single-user** web app for reading and listening t
 |---|---|
 | Audience | One user (the owner). Private app, sign-up disabled. Not a public distribution service. |
 | Primary usage | Desktop, reading while listening. Sentence/segment highlight is the core experience. PWA/offline is a non-goal. |
-| Voice | Multi-voice: narrator + per-character dialogue voices (male/female defaults, per-character overrides). |
+| Voice | Multi-voice: narrator + per-character dialogue voices (male/female defaults, per-character overrides). Default Southern presets: narrator "Đức Trí", male "Thái Sơn", female "Mỹ Duyên". |
 | Speaker attribution | Three pluggable strategies, chained: cloud LLM (Gemini free tier) → local LLM (llama.cpp, CPU) → heuristic. |
-| Emotion | Layered: LLM labels emotion per segment → VieNeu clones from a per-emotion reference clip bank → non-verbal tags → prosody post-processing. Verified by a spike before building. |
-| TTS engine | VieNeu-TTS v3 Turbo (Apache-2.0), local, CUDA when available else ONNX CPU. |
+| Emotion | Layered: LLM labels emotion per segment → VieNeu clones from a per-emotion reference clip only for the (voice, emotion) pairs validated in spike S1, neutral ref elsewhere → prosody post-processing. Non-verbal tags dropped (S1). |
+| TTS engine | VieNeu-TTS v3 Turbo (Apache-2.0), local, CUDA by default (verified in S3); ONNX CPU fallback must be verified in M2. |
 | Audio storage | Cloudflare R2. Fallback when worker is offline: Microsoft Edge TTS, single voice, not persisted. |
 | Sources | `SourceAdapter` interface; v2 ships the truyenfull adapter only. |
 | Architecture | Approach A: Supabase as hub, worker makes **outbound connections only**. |
@@ -31,7 +31,7 @@ AudioTruyen v2 is a **private, single-user** web app for reading and listening t
 
 ### Hardware constraint
 
-Worker host: Windows 11 laptop, NVIDIA GTX 1650 Max-Q **4 GB VRAM**. Only one model may hold VRAM at a time. The local LLM runs on CPU. VieNeu v3 Turbo peaks around 1.1 GB VRAM and runs ~2x realtime on CPU, so the whole pipeline also works without a GPU.
+Worker host: Windows 11 laptop, NVIDIA GTX 1650 Max-Q **4 GB VRAM**. Only one model may hold VRAM at a time. The local LLM runs on CPU. VieNeu v3 Turbo measured ~1.37 GB torch peak VRAM on the GTX 1650 (spike S3). Its ONNX CPU path (published as ~2x realtime) did not load in S3, so running without a GPU stays unverified until M2 re-benchmarks it.
 
 ### Non-goals (v2)
 
@@ -63,7 +63,7 @@ Personal-use note: reading the HTML skips the site's ad monetization. This is ac
 
 | Model | License | Vietnamese | Fit for 4 GB | Emotion control | Verdict |
 |---|---|---|---|---|---|
-| VieNeu-TTS v3 Turbo | Apache-2.0 | Native, 3 dialects, 23-25 presets, cloning from 3-8 s | Yes (~1.1 GB VRAM; ONNX CPU ~2x realtime) | Experimental tags `[cười]` `[thở dài]` `[hắng giọng]`; style follows the reference clip | **Chosen** |
+| VieNeu-TTS v3 Turbo | Apache-2.0 | Native, 3 dialects, 23-25 presets, cloning from 3-8 s | Yes. Verified on GTX 1650 (S3): sequential RTF 0.22, batch RTF 0.13, first sentence 0.52 s, ~1.37 GB torch peak VRAM. ONNX CPU (published ~2x realtime) not verified. | Experimental tags `[cười]` `[thở dài]` `[hắng giọng]` (dropped after S1: `[cười]` broken, `[thở dài]` inaudible); style follows the reference clip | **Chosen** |
 | VoxCPM2 | Apache-2.0 | Official, 30 languages | No (~8 GB VRAM) | Voice Design from text description, style tags | Used **once** offline (Colab/Kaggle) to generate emotion reference clips |
 | F5-TTS Vietnamese | CC-BY-NC | Yes | Borderline | Via reference | Rejected (non-commercial, heavier) |
 | Fish Audio S2 Pro | Non-commercial | Yes | No (4B + 400M) | Best | Rejected |
@@ -184,7 +184,9 @@ chapter_audio (
   id uuid pk, chapter_id fk, voice_hash text,
   status text check in ('queued','partial','ready','failed'),
   provider text,                               -- 'vieneu'
-  chunks jsonb,                                -- [{ key, start_ms, end_ms }]
+  init_key text null,                          -- shared WebM init segment (init.webm)
+  chunks jsonb,                                -- [{ key, start_ms, end_ms }]: cluster media segments of one
+                                               -- continuous encode, times read from the muxed stream (5.6)
   full_key text null, duration_ms int null,
   segments jsonb,                              -- see 4.1
   warnings jsonb, created_at, updated_at,
@@ -228,7 +230,6 @@ settings (user_id pk, data jsonb, updated_at)  -- see 7.1 / 6.4
   "gender": "male" | "female" | "unknown",
   "emotion": "neutral" | "happy" | "sad" | "angry" | "fearful" | "whisper" | "shout" | "tender",
   "intensity": 0.0-1.0,
-  "tags": [{ "at": 34, "tag": "[cười]" }],
   "voice_id": "uuid",
   "start_ms": 81234, "end_ms": 85610
 }
@@ -241,10 +242,13 @@ settings (user_id pk, data jsonb, updated_at)  -- see 7.1 / 6.4
 ### 4.3 R2 key layout
 
 ```
-audio/{novel_id}/{chapter_id}/{voice_hash}/chunk-{0000}.webm
+audio/{novel_id}/{chapter_id}/{voice_hash}/init.webm
+audio/{novel_id}/{chapter_id}/{voice_hash}/seg-{0000}.webm
 audio/{novel_id}/{chapter_id}/{voice_hash}/full.webm
 voices/{voice_id}/{emotion}.wav
 ```
+
+`init.webm` is the shared init segment and `seg-{0000}.webm` are the cluster media segments of one continuous encode per chapter (spike S2). `full.webm` = `init.webm` + all `seg-*` in order.
 
 ---
 
@@ -280,8 +284,8 @@ Truyenfull adapter:
 
 1. **Normalize** (TTS input only; display text stays original): Unicode NFC; de-obfuscate dotted words (`c.h.ử.i` → `chửi`, regex for single Vietnamese letters separated by dots); numbers, dates, units, abbreviations via VietNormalizer; then lexicon rules (global by `position`, then novel-level). Each transformation keeps an offset map back to original text.
 2. **Segment**: split paragraphs; within paragraphs separate dialogue (`"..."`, `“...”`, lines starting with `-`/`–`) from narration; split segments over ~250 chars at sentence boundaries. Each segment records its `src` range in original text.
-3. **Analyze** (speaker, gender, emotion, intensity, non-verbal tags) via strategy chain (5.4). Cached in `chapter_analysis`.
-4. **Resolve voice**: narration → narrator voice; dialogue → character's voice, else default by gender, else default narrator-alt. Then pick the voice's reference clip for the segment's emotion; fall back to `neutral`.
+3. **Analyze** (speaker, gender, emotion, intensity) via strategy chain (5.4). Cached in `chapter_analysis`.
+4. **Resolve voice**: narration → narrator voice; dialogue → character's voice, else default by gender, else default narrator-alt. Then pick the voice's reference clip for the segment's emotion if that (voice, emotion) pair is enabled (5.10); otherwise fall back to `neutral`.
 
 ### 5.4 Speaker/emotion strategies
 
@@ -293,7 +297,7 @@ class SpeakerStrategy(Protocol):
 
 Chain order configurable in settings (default: `gemini → local_llm → heuristic`). A strategy result is accepted only if it passes JSON-schema validation and covers every segment id; otherwise the next strategy runs.
 
-- **gemini**: one request per chapter. Input: numbered segments + compact roster. Output: compact JSON array `[[i, speaker, gender, emotion, intensity, tags]]` plus `new_characters`. Uses structured output (response schema) where the model supports it.
+- **gemini**: one request per chapter. Input: numbered segments + compact roster. Output: compact JSON array `[[i, speaker, gender, emotion, intensity]]` plus `new_characters`. No non-verbal tags (dropped after spike S1). Uses structured output (response schema) where the model supports it.
 - **local_llm**: llama.cpp (via `llama-cpp-python`) on CPU, Qwen-class 1.5-3B instruct GGUF Q4, same prompt and schema, processed in windows of ~40 segments. Model file path in `.env`; strategy is skipped if absent.
 - **heuristic**: dialogue speaker from adjacent attribution verbs (`nói`, `hỏi`, `quát`, `gầm lên`, `thì thầm`, ...) and the nearest name or pronoun (`anh/hắn/ông` → male, `cô/nàng/bà` → female); emotion from verb lexicon and punctuation (`!` → intensity up, `...` → sad/tender, `?` neutral). Unknown → `unknown` gender, `neutral`.
 
@@ -313,15 +317,16 @@ Roster merge: new characters inserted; existing non-`manual` rows may update `ge
 ```python
 class TTSProvider(Protocol):
     name: str
-    def synthesize(self, text: str, voice: VoiceRef, emotion: str, intensity: float,
-                   tags: list[Tag]) -> np.ndarray: ...   # float32 mono @ provider rate
+    def synthesize(self, text: str, voice: VoiceRef, emotion: str,
+                   intensity: float) -> np.ndarray: ...   # float32 mono @ provider rate
 ```
 
-- `vieneu` provider: VieNeu v3 Turbo; device auto (`cuda` if available, else ONNX CPU). Clones from the selected reference clip. Temperature `0.8` for neutral, up to `0.95` scaled by intensity for expressive segments. Non-verbal tags inserted at `tags[].at`.
+- `vieneu` provider: VieNeu v3 Turbo; default device `cuda` (spike S3 on the GTX 1650: sequential RTF 0.22, batch RTF 0.13, first sentence 0.52 s). The ONNX CPU fallback is used only when CUDA is unavailable and is unverified: S3 could not load the ONNX model (huggingface_hub 2.x symlinked cache fails onnxruntime's external-data path check). M2 must load the ONNX model from a real `local_dir` (or pin `huggingface_hub<1.0`) and re-benchmark CPU RTF before relying on it. Clones from the selected reference clip. Sampling via `infer(temperature=...)` (v3 Turbo default `0.8`; no seed parameter): `0.8` for neutral, up to `0.95` scaled by intensity for expressive segments.
 - Per segment: retry once on failure; then retry with the `neutral` ref; then with the default narrator preset; record a warning. A segment never blocks the chapter.
+- Quality guard per segment: VieNeu output noise varies per sample and per preset. The worker measures the 4-12 kHz / 0-4 kHz energy ratio in vowel frames and re-synthesizes outliers (max 2 retries).
 - Post-processing per segment: trim leading/trailing silence, loudness-normalize, append an emotion-dependent pause (neutral 250 ms, sad/tender 450 ms, angry/shout 150 ms; paragraph end +200 ms).
-- Chunking: concatenate segments in order into ~30 s chunks (segment boundaries respected), encode each as standalone WebM/Opus 48 kbps via ffmpeg, upload immediately, append to `chapter_audio.chunks`, set `status='partial'`. On completion, concatenate into `full.webm`, set `ready`, `duration_ms`, final `segments`.
-- Synthesis order is sequential so the first chunk is ready within seconds of job start.
+- Encoding (spike S2): one continuous ffmpeg/libopus process per chapter (WebM/Opus 48 kbps, `-f webm -live 1`, `-cluster_time_limit` ≈ 30 s), fed segment PCM in order. The worker uploads `init.webm` first, then each cluster as `seg-{0000}.webm` as soon as it is emitted, appends it to `chapter_audio.chunks`, and sets `status='partial'`. Cluster cut points and `start_ms`/`end_ms` are read from the muxed stream (ffmpeg cuts about 19 ms before the limit); the worker never assumes cluster N == text chunk N. On completion, `full.webm` = init + all clusters; set `ready`, `duration_ms`, final `segments`.
+- Synthesis order is sequential so the first cluster is ready within seconds of job start.
 
 ### 5.7 Scheduler
 
@@ -341,7 +346,10 @@ When the web app opens or advances to chapter N, it enqueues `fetch_chapter` and
 
 ### 5.10 Emotion reference bank
 
-- `tools/emotion_refs.ipynb` (Colab/Kaggle GPU): VoxCPM2 Voice Design generates 3-8 s Vietnamese clips per (voice, emotion) from text descriptions, for the narrator, default male, and default female voices.
+- Default voices (Southern VieNeu presets, owner choice in spike S1): narrator "Đức Trí", male "Thái Sơn", female "Mỹ Duyên". "Kim Thanh" was rejected for about 5x more 4-12 kHz vowel noise than the other presets.
+- `tools/emotion_refs.ipynb` (Colab/Kaggle GPU): VoxCPM2 controllable cloning generates 3-8 s Vietnamese clips per (voice, emotion), for the narrator, default male, and default female voices.
+- Emotion refs are enabled only for the five pairs validated in spike S1: narrator/angry, male/angry, male/whisper, female/happy, female/sad. Every other pair (including all `fearful`) falls back to the neutral ref + prosody post-processing.
+- Refs regenerated with the notebook (or new pairs) can be re-validated with the S1 listening-page approach (VoxCPM2 ref, VieNeu preset and VieNeu clone side by side, rated 0/1/2) before being enabled.
 - Clips are uploaded via the Settings → Voices page (or the notebook writes them directly to R2) and referenced from `voices.refs`.
 - Users may also upload their own clip per emotion. Only voices the owner has rights to may be cloned.
 
@@ -395,11 +403,11 @@ Command palette (`Ctrl+K`): search library and chapters, run commands, paste a t
 
 ### 6.5 Audio engine
 
-- Primary: `MediaSource` + `SourceBuffer('audio/webm; codecs="opus"')` in `sequence` mode, appending chunks as they become available; `<audio>` element provides `preservesPitch`, `playbackRate`, seeking, and Media Session integration.
+- Primary: `MediaSource` + one `SourceBuffer('audio/webm; codecs="opus"')` in `segments` mode. The player appends `init.webm` once, then the cluster media segments (`seg-*`) in order as they become available, with no `timestampOffset` or append windows; `<audio>` element provides `preservesPitch`, `playbackRate`, seeking, and Media Session integration.
 - When `full_key` exists and MSE errors, fall back to the full file.
 - Signed URLs (1 h TTL) from `GET /api/audio/[chapterAudioId]/urls`; on 403 the player refreshes URLs once.
 - Edge TTS fallback: `GET /api/fallback-tts?chapterId=&segment=` streams MP3 for one segment; player plays segments sequentially with a plain `<audio>` element; single voice; nothing persisted.
-- Spike S2 must confirm gapless sequence-mode playback of independently encoded WebM chunks in Chrome/Edge/Firefox; if it fails, chunks are encoded as WebM media segments sharing one init segment.
+- Spike S2 outcome (Chrome): independently encoded WebM chunks clicked audibly at boundaries in both `sequence` mode and `segments` mode with offsets + append windows, so they are rejected. Shared-init cluster segments from one continuous encode played with no click at any boundary (sine and speech) and are the chosen design. Edge/Firefox were not tested in S2.
 
 ### 6.6 Settings pages
 
@@ -445,8 +453,9 @@ UI copy: Vietnamese, sentence case, no raw exception strings, errors say what ha
 
 ### 7.4 Testing
 
-- Worker (`pytest`): truyenfull fixtures (saved real HTML for novel page, TOC pages, chapters); golden tests for normalization and segmentation (dotted obfuscation, dash-led dialogue, nested quotes, long sentences); schema validation for strategy output with a fake LLM; rate limiter with a fake clock and simulated 429 types; `claim_job` concurrency against local Supabase (`supabase start`); audio chunking timing math.
+- Worker (`pytest`): truyenfull fixtures (saved real HTML for novel page, TOC pages, chapters); golden tests for normalization and segmentation (dotted obfuscation, dash-led dialogue, nested quotes, long sentences); schema validation for strategy output with a fake LLM; rate limiter with a fake clock and simulated 429 types; `claim_job` concurrency against local Supabase (`supabase start`); audio chunking timing math (cluster cut points read from the muxed stream); segment quality-guard ratio on fixtures.
 - Web (`vitest`): theme derivation and contrast math, timeline/segment mapping, word-highlight interpolation, settings schema.
+- Playback continuity (M3, browser): an AudioWorklet-based sample-continuity test plays a sine fixture encoded like production (shared init + clusters) through the MSE player and asserts no sample-step jump or level dip at cluster boundaries. ScriptProcessor capture is not used (it dropped samples under main-thread load in spike S2).
 - E2E (`playwright`): sign-in, add novel via pasted URL, open chapter, play, highlight advances, bookmark, theme change. Runs against local Supabase with the worker in `--fake-tts` mode.
 - CI (GitHub Actions): web lint, typecheck, vitest, build; worker ruff, pytest (unit tier; DB tier when Supabase CLI is available in CI).
 
@@ -464,16 +473,16 @@ Each milestone gets its own implementation plan (writing-plans skill).
 
 | # | Milestone | Exit criteria |
 |---|---|---|
-| M0 | Spikes | S1: owner listens to neutral vs angry/sad/whisper renditions of the same lines from VieNeu with emotion refs and rates them acceptable or not. S2: gapless MSE playback of 3 independently encoded WebM/Opus chunks with speed change. S3: VieNeu install + RTF measured on the GTX 1650 (CUDA) and CPU. Throwaway code. |
+| M0 | Spikes | **Done** (2026-10-14). Results and decisions: `docs/superpowers/spikes/2026-10-14-m0-results.md`. S1 PASS (emotion refs for 5 validated pairs, tags dropped), S2 shared-init cluster segments PASS, S3 GPU OK (CPU unverified). |
 | M1 | Foundation | Repo restructured, v1 removed, Supabase schema + RLS + `claim_job`, auth with single user, R2 bucket + tokens, CI green |
-| M2 | Worker core | Job loop with leases/heartbeat, truyenfull adapter with fixtures, normalize + segment, heuristic strategy, VieNeu single-voice synthesis, chunk upload, `--fake-tts` |
-| M3 | Web core | Library, novel page, reader layout A, MSE player with highlight + auto-scroll, progress, prefetch, worker-offline state |
-| M4 | Multi-voice + emotion | Gemini strategy + rate limiter, local LLM strategy, roster merge, cast drawer + speaker reassignment, voice bank + emotion refs, notebook |
+| M2 | Worker core | Job loop with leases/heartbeat, truyenfull adapter with fixtures, normalize + segment, heuristic strategy, VieNeu single-voice synthesis with quality guard, continuous encoder + cluster upload, ONNX CPU load fix + CPU RTF re-benchmark, `--fake-tts` |
+| M3 | Web core | Library, novel page, reader layout A, MSE player (shared init + clusters) with highlight + auto-scroll, AudioWorklet continuity test, progress, prefetch, worker-offline state |
+| M4 | Multi-voice + emotion | Gemini strategy + rate limiter, local LLM strategy, roster merge, cast drawer + speaker reassignment, voice bank + per-pair emotion refs (5 validated pairs, neutral elsewhere; no non-verbal tags), notebook |
 | M5 | Features | Lexicon (global + novel), bookmarks + notes, stats, sleep timer, follow + scheduler, theme customizer, command palette, Edge fallback |
 | M6 | Deploy + hardening | Vercel production, NSSM service docs, README rewrite, E2E suite in CI |
 
-If S1 fails (emotion transfer from refs is inaudible), M4 keeps attribution + tags + prosody and adds a `voxcpm2` remote provider design as a follow-up; nothing else changes because providers are behind `TTSProvider`.
-If S2 fails, chunks switch to shared-init WebM media segments (6.5).
+S1 outcome: emotion transfer from refs is audible only for some (voice, emotion) pairs, so M4 enables refs per pair (5.10) and uses the neutral ref + prosody elsewhere; non-verbal tags are dropped. A `voxcpm2` remote provider stays a possible follow-up behind `TTSProvider`.
+S2 outcome: independently encoded chunks failed (audible splice clicks), so audio uses shared-init WebM cluster segments from one continuous encode (5.6, 6.5).
 
 ---
 
