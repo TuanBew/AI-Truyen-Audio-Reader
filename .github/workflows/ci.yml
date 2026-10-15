@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "rework/**"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-placeholder-anon-key-000000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      # build generates next-env.d.ts (gitignored), which typecheck needs
+      - run: npm run build
+      - run: npm run typecheck
+
+  worker:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run pytest -q -m "not db"
+
+  database:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npx --yes supabase@2.121.0 start
+      - run: npx --yes supabase@2.121.0 test db
+      - run: bash scripts/supabase-test-env.sh >> "$GITHUB_ENV"
+      - name: Require TEST_SUPABASE_* (no silent db skips)
+        run: |
+          test -n "$TEST_SUPABASE_URL" \
+            && test -n "$TEST_SUPABASE_ANON_KEY" \
+            && test -n "$TEST_SUPABASE_SERVICE_ROLE_KEY"
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked
+        working-directory: worker
+      - name: Worker db tier (fails on any skip)
+        working-directory: worker
+        shell: bash
+        run: |
+          set -o pipefail
+          uv run pytest -q -m db -rs | tee "$RUNNER_TEMP/db.txt"
+          ! grep -q " skipped" "$RUNNER_TEMP/db.txt"
