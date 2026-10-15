@@ -29,5 +29,22 @@ describe("safeNextPath", () => {
   });
   it("never redirects back to the login page", () => {
     expect(safeNextPath("/login")).toBe("/");
+    expect(safeNextPath("/login?next=/x")).toBe("/");
+  });
+  it("rejects control characters that URL parsing strips into a protocol-relative target", () => {
+    expect(safeNextPath("/\t/evil.example")).toBe("/");
+    expect(safeNextPath("/\n/evil.example")).toBe("/");
+    expect(safeNextPath("/\r\\evil.example")).toBe("/");
+    expect(safeNextPath("/x\u0000y")).toBe("/");
+  });
+  it("rejects dot segments that normalize into a protocol-relative target", () => {
+    expect(safeNextPath("/.//evil.example")).toBe("/");
+    expect(safeNextPath("/a/..//evil.example")).toBe("/");
+  });
+  it("keeps percent-encoded characters as a same-site path", () => {
+    expect(safeNextPath("/%09/evil")).toBe("/%09/evil");
+  });
+  it("keeps the query string and hash", () => {
+    expect(safeNextPath("/novel/1?a=b#c")).toBe("/novel/1?a=b#c");
   });
 });
