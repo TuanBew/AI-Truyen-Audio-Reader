@@ -485,7 +485,7 @@ UI copy: Vietnamese, sentence case, no raw exception strings, errors say what ha
 The Cloudflare account behind R2 has the owner's bank card attached, and R2 bills usage beyond the free tier (storage > 10 GB-month, Class A > 1M ops/month, Class B > 10M ops/month) with no hard spending cap. Every milestone must keep a leaked credential or a runaway loop from turning into a bill.
 
 Account level (owner, done once; checked in M1 Task 9 and M6):
-- Repository private (a public repo turns any accidental secret commit into a public leak).
+- Repository stays public (owner decision, 2026-10-15). No per-commit secret-scanning hook is added; instead M6 runs one full secret scan of the whole git history before the project is called done, and every push in between is checked by the controller for `.env`/credential files and key patterns.
 - 2FA on Cloudflare, Supabase, GitHub and (later) Vercel.
 - Cloudflare usage-based billing notifications for R2 at roughly 80% of each free allowance.
 - A card with a low online spending limit (or a virtual card) for Cloudflare.
