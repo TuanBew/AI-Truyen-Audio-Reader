@@ -1,58 +1,43 @@
+# OS and editors
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Env and secrets (examples are committed)
+.env
+.env.*
+!.env.example
+!.env.local.example
+audiotruyen-489912-*.json
+*service_account*.json
+
 # Python
 __pycache__/
 *.py[cod]
-*.pyo
 .venv/
-venv/
+.pytest_cache/
+.ruff_cache/
 *.egg-info/
 dist/
 build/
 
-# Credentials — whole directory
-backend/credentials/
-
-# Credentials & secrets (other)
-audiotruyen-489912-4ca3ce87592a.json
-*.json.bak
-
-# Environment files — explicit paths
-backend/.env
-frontend/.env.local
-.env
-.env.local
-.env.*.local
-
-# Runtime state
-backend/.audio_state.json
+# Worker runtime
+worker/logs/
 
 # Node / Next.js
-frontend/node_modules/
-frontend/.next/
-frontend/out/
+node_modules/
+web/.next/
+web/out/
+web/next-env.d.ts
+*.tsbuildinfo
 
-# OS
-.DS_Store
-Thumbs.db
+# Supabase local state
+supabase/.temp/
+supabase/.branches/
 
-# VSCode
-.vscode/
+# Data backups (never commit)
+backup/
 
-# Tool-generated / local tooling
+# Local tooling (launch.json is force-added on purpose)
 .claude/
-.playwright-mcp/
-
-# Git worktrees
-.worktrees/
-
-# Local tooling / brainstorming artifacts
 .superpowers/
-brainstorm-ui-direction.png
-screenshots/
-CLAUDE.md
-task_progress.md
-
-# M0 spikes (throwaway)
-spikes/m0/.venv-*/
-spikes/m0/out/
-spikes/m0/__pycache__/
-spikes/m0/.pytest_cache/
