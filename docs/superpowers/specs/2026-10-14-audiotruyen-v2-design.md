@@ -434,7 +434,7 @@ Command palette (`Ctrl+K`): search library and chapters, run commands, paste a t
 - Duration: if the row is already `ready` when the player opens it, the player sets `mediaSource.duration = duration_ms / 1000` right after `sourceopen` and **before** the first append. It never lowers `duration` once frames are buffered (Chromium throws `InvalidStateError` when `duration` is set below the highest buffered timestamp), and for a `partial` row it leaves `duration` alone and lets `endOfStream()` finalize it after the last cluster is appended. Expected buffered end ≈ `duration_ms` + ~21 ms (variant C measured 30.021 s for a 30.000 s signal); the player must not treat that tail as an error.
 - The player watches `chapter_audio` via Realtime; when `attempt` changes it discards the SourceBuffer and reloads the chapter from the new attempt's `init.webm`, resuming at the same **segment index** (not the same time, because a new attempt has different timing).
 - When `full_key` exists and MSE errors, fall back to the full file (seekable remux, 4.3).
-- Signed URLs (1 h TTL) from `GET /api/audio/[chapterAudioId]/urls`, which returns URLs for `init_key`, every key in `chunks` (segments, in order) and `full_key` when present, all for the row's current `attempt`; on 403 the player refreshes URLs once.
+- Signed URLs (10 min TTL, 7.3.1) from `GET /api/audio/[chapterAudioId]/urls`, which returns URLs for `init_key`, every key in `chunks` (segments, in order) and `full_key` when present, all for the row's current `attempt`; on 403 the player refreshes URLs once.
 - Edge TTS fallback: `GET /api/fallback-tts?chapterId=&segment=` streams MP3 for one segment; player plays segments sequentially with a plain `<audio>` element; single voice; nothing persisted.
 - Spike S2 outcome (validated in the Claude desktop browser pane, Chromium 152; owner's browser unrecorded; Edge/Firefox untested): independently encoded WebM chunks clicked audibly at boundaries in both `sequence` mode and `segments` mode with offsets + append windows, so they are rejected. Shared-init cluster segments from one continuous encode played with no click at any boundary (sine and speech) and are the chosen design. C was produced by a one-shot offline encode; the incremental pipe encode is validated in M2 (8).
 
@@ -480,6 +480,30 @@ UI copy: Vietnamese, sentence case, no raw exception strings, errors say what ha
 - Sign-up disabled; single user created in the Supabase dashboard.
 - `.env` files are gitignored (root pattern `.env` already covers `worker/.env` and `web/.env*`).
 
+### 7.3.1 Cost and abuse protection (owner requirement, 2026-10-15)
+
+The Cloudflare account behind R2 has the owner's bank card attached, and R2 bills usage beyond the free tier (storage > 10 GB-month, Class A > 1M ops/month, Class B > 10M ops/month) with no hard spending cap. Every milestone must keep a leaked credential or a runaway loop from turning into a bill.
+
+Account level (owner, done once; checked in M1 Task 9 and M6):
+- Repository private (a public repo turns any accidental secret commit into a public leak).
+- 2FA on Cloudflare, Supabase, GitHub and (later) Vercel.
+- Cloudflare usage-based billing notifications for R2 at roughly 80% of each free allowance.
+- A card with a low online spending limit (or a virtual card) for Cloudflare.
+- R2 bucket stays private: no `r2.dev` public URL, no custom domain; CORS limited to the app origins (M3).
+- R2 tokens scoped to the single bucket; worker token read/write, web token read-only; rotate immediately if either leaks.
+- The Gemini key's Google project has no billing account attached (free tier only, so overuse fails instead of charging).
+- Vercel stays on Hobby (no card); if ever upgraded, spend management is configured before deploying.
+
+Built into the code:
+- Storage cap (M2): the worker records the byte size of every object it uploads (`chapter_audio`) and refuses new uploads when the recorded total exceeds `R2_MAX_BYTES` (default 8 GiB). Synthesis jobs then fail with a clear Vietnamese message; nothing is uploaded.
+- Write-ops cap (M2): the worker counts its R2 PUTs per calendar month in Postgres and stops uploading above `R2_MAX_PUTS_PER_MONTH` (default 800,000).
+- Kill switch (M2): `R2_UPLOADS_ENABLED=false` in `worker/.env` stops all uploads without stopping the worker.
+- Queue limits (M2): a database trigger rejects new `jobs` rows when the owner already has 500 `queued` jobs, so a client bug or a stolen session cannot enqueue unbounded synthesis.
+- Read-ops control (M3): signed URLs live 10 minutes (not 1 h); audio keys are immutable, so objects are served with `Cache-Control: public, max-age=31536000, immutable` and the browser re-uses them instead of re-reading R2; the signed-URL route handler is rate limited per user (60 requests/minute, counted in Postgres).
+- Route rate limits (M3/M5): every route handler that reaches R2 or Edge TTS is authenticated and rate limited; Supabase Auth's own sign-in rate limits stay enabled.
+- Lifecycle (M2): an R2 lifecycle rule deletes `_doctor/` probes after 1 day; GC (4.2) removes stale audio.
+- Visibility (M5): Settings → Worker shows recorded R2 bytes and monthly PUTs against the caps.
+
 ### 7.4 Testing
 
 - Worker (`pytest`): truyenfull fixtures (saved real HTML for novel page, TOC pages, chapters); golden tests for normalization and segmentation (dotted obfuscation, dash-led dialogue, nested quotes, long sentences); schema validation for strategy output with a fake LLM; rate limiter with a fake clock and simulated 429 types; `claim_job` concurrency against local Supabase (`supabase start`); audio chunking timing math (cluster cut points read from the muxed stream); segment quality-guard ratio on fixtures.
@@ -492,7 +516,7 @@ UI copy: Vietnamese, sentence case, no raw exception strings, errors say what ha
 
 - Vercel project root `web/`, region `sin1`, preview deploys per PR. Env: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `R2_ACCOUNT_ID`, `R2_READ_ACCESS_KEY_ID`, `R2_READ_SECRET_ACCESS_KEY`, `R2_BUCKET`.
 - Supabase: the existing v1 project is reused (owner decision, M1). Its first v2 migration drops the v1 tables (`novels`, `reading_progress`, function `update_updated_at`) after an owner-confirmed backup, then creates the v2 schema. Migrations via Supabase CLI; Realtime enabled for `jobs`, `chapter_audio`, `worker_status`; email sign-up disabled; the owner's account signs in with email + password.
-- R2 bucket private; two API tokens (worker read/write, Vercel read-only).
+- R2 bucket private (no `r2.dev` URL, no custom domain); two API tokens scoped to the bucket (worker read/write, Vercel read-only); cost and abuse protections in 7.3.1.
 
 ---
 
