@@ -1,0 +1,56 @@
+@import "tailwindcss";
+
+/* Theme tokens (spec 6.4). M1 ships the two default presets; M5 adds the customizer. */
+:root {
+  /* Giấy: light, cool */
+  --bg: #f2f4f5;
+  --surface: #f8f9fa;
+  --surface-raised: #fdfdfd;
+  --text: #15191d;
+  --text-muted: #525c66;
+  --border: #d5dade;
+  --accent: #1f6f78;
+  --accent-contrast: #f5fafa;
+  --focus: #1f6f78;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* Đêm: dark charcoal */
+    --bg: #111417;
+    --surface: #171b1f;
+    --surface-raised: #1e2328;
+    --text: #e3e6e9;
+    --text-muted: #9aa3ad;
+    --border: #2b3238;
+    --accent: #6bb8c0;
+    --accent-contrast: #0c1a1c;
+    --focus: #6bb8c0;
+  }
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-text: var(--text);
+  --color-text-muted: var(--text-muted);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-contrast: var(--accent-contrast);
+  --font-sans: var(--font-be-vietnam), system-ui, sans-serif;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
