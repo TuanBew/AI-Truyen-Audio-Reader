@@ -50,3 +50,16 @@ def test_missing_required_value_fails(env):
     env.delenv("R2_BUCKET")
     with pytest.raises(ValidationError):
         load_settings(_env_file=None)
+
+
+def test_validation_error_hides_secret_values(env):
+    # pydantic middle-truncates input_value, so put a canary at the tail of the input
+    # dict (R2_SECRET_ACCESS_KEY, last provided field) as well as in the middle.
+    env.setenv("SUPABASE_SERVICE_ROLE_KEY", "leak-canary-123")
+    env.setenv("R2_SECRET_ACCESS_KEY", "leak-canary-456")
+    env.delenv("R2_BUCKET")
+    with pytest.raises(ValidationError) as excinfo:
+        load_settings(_env_file=None)
+    message = str(excinfo.value)
+    assert "leak-canary-123" not in message
+    assert "leak-canary-456" not in message

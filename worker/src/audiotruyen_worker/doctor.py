@@ -17,7 +17,8 @@ class CheckResult:
 def run_check(name: str, fn: Callable[[], str]) -> CheckResult:
     try:
         return CheckResult(name, True, fn())
-    except Exception as exc:  # noqa: BLE001 - doctor reports every failure as a result
+    # Broad on purpose: doctor reports every failure as a result instead of crashing.
+    except Exception as exc:
         return CheckResult(name, False, f"{type(exc).__name__}: {exc}")
 
 
