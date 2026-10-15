@@ -3,7 +3,7 @@
 import { useActionState } from "react";
 import { signIn, type SignInState } from "./actions";
 
-const initialState: SignInState = { error: null };
+const initialState: SignInState = { error: null, email: "" };
 
 export function LoginForm({ next }: { next: string }) {
   const [state, formAction, pending] = useActionState(signIn, initialState);
@@ -21,6 +21,7 @@ export function LoginForm({ next }: { next: string }) {
           type="email"
           autoComplete="email"
           required
+          defaultValue={state.email}
           className="h-11 rounded-lg border border-border bg-surface-raised px-3 text-text outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
         />
       </div>
