@@ -133,7 +133,7 @@ v1 code (`backend/`, `frontend/`, `docker-compose.yml`, Dockerfiles) is deleted 
 
 ## 4. Data model (Supabase Postgres)
 
-All tables have `user_id uuid not null references auth.users` (except worker-only tables), RLS enabled, policy "authenticated users own rows only", anon denied. The worker uses the service-role key and bypasses RLS.
+Every user-data table (all tables below except `worker_status` and `llm_usage`) has `user_id uuid not null references auth.users on delete cascade`, RLS enabled, anon denied. Policies: `authenticated` has full access to its own rows in `novels`, `chapters`, `characters`, `voices`, `lexicon`, `jobs`, `progress`, `listened_chapters`, `bookmarks`, `listen_sessions`, `settings`; read-only access to its own rows in `chapter_analysis` and `chapter_audio` (written only by the worker); read-only access to all rows of `worker_status` and `llm_usage`. The worker uses the service-role key and bypasses RLS; when it inserts child rows it copies `user_id` from the parent novel.
 
 ```sql
 novels (
@@ -183,7 +183,7 @@ lexicon (
 chapter_analysis (
   chapter_id fk, text_hash text, strategy text, strategy_version int,
   segments jsonb, created_at,
-  primary key (chapter_id, text_hash, strategy_version)
+  primary key (chapter_id, text_hash, strategy, strategy_version)
 )
 
 chapter_audio (
@@ -202,7 +202,8 @@ chapter_audio (
 )
 
 jobs (
-  id uuid pk, type text check in ('search','fetch_novel','fetch_chapter','synthesize','check_updates'),
+  id uuid pk, user_id,                         -- owner, so the web app can enqueue and read jobs through RLS
+  type text check in ('search','fetch_novel','fetch_chapter','synthesize','check_updates'),
   payload jsonb, priority int,                 -- 0 interactive, 10 prefetch, 20 background
   status text check in ('queued','running','done','failed','cancelled'),
   attempts int default 0, max_attempts int default 3,
@@ -225,7 +226,7 @@ listen_sessions (id, chapter_id, started_at, seconds int)
 settings (user_id pk, data jsonb, updated_at)  -- see 7.1 / 6.4
 ```
 
-`claim_job(worker_id text, lease_seconds int)` is a SQL function: selects the first `queued` job with `run_after <= now()` ordered by `priority, created_at`, `FOR UPDATE SKIP LOCKED`, sets `running`, `lease_until`, `worker_id`, increments `attempts`, returns it. A companion `requeue_expired_jobs()` resets `running` jobs whose `lease_until < now()`.
+`claim_job(worker_id text, lease_seconds int)` is a SQL function: selects the first `queued` job with `run_after <= now()` ordered by `priority, created_at`, `FOR UPDATE SKIP LOCKED`, sets `running`, `lease_until`, `worker_id`, increments `attempts`, returns it. A companion `requeue_expired_jobs()` resets `running` jobs whose `lease_until < now()`. `begin_chapter_audio(chapter_id uuid, voice_hash text)` creates or re-attempts a `chapter_audio` row and returns `(id, attempt, status)` (5.1). Only the service role may execute these three functions.
 
 ### 4.1 Segment schema
 
@@ -272,7 +273,9 @@ voices/{voice_id}/{emotion}.wav
 - One job at a time. Lease 5 min, extended by heartbeat.
 - Failure: `attempts < max_attempts` → `queued` with `run_after = now() + 2^attempts min`; else `failed` with a human-readable `error`.
 - `synthesize` jobs whose `voice_hash` no longer matches the current settings are marked `cancelled` without work.
-- `synthesize` re-runs (lease expiry after a crash, retry after failure): if a `chapter_audio` row for `(chapter_id, voice_hash)` exists and is not `ready`, the worker increments its `attempt`, resets `init_key`, `chunks`, `full_key` and `duration_ms` to null/empty, sets `status='queued'`, and writes all new objects under the new `{attempt}` prefix (4.3). It never resumes or overwrites a previous attempt. Objects of abandoned attempts are removed by GC (4.2).
+- Row ownership: only the worker creates `chapter_audio` rows. The web app enqueues `synthesize` jobs and reads rows; it never inserts them. When a `synthesize` job starts, the worker calls `begin_chapter_audio(chapter_id, voice_hash)` (SQL function): it inserts the row with `attempt = 1, status = 'queued'` if absent; if a non-`ready` row exists it increments `attempt` and resets `init_key`, `chunks`, `full_key`, `duration_ms` to null/empty and `status` to `'queued'`; if the row is `ready` it returns it unchanged and the job ends as done. The function returns `(id, attempt, status)`.
+- `synthesize` re-runs (lease expiry after a crash, retry after failure) therefore always start a new attempt and write all new objects under the new `{attempt}` prefix (4.3). They never resume or overwrite a previous attempt. Objects of abandoned attempts are removed by GC (4.2).
+- Attempt fencing: every worker write to `chapter_audio` after `begin_chapter_audio` is conditional on the attempt it owns (`... WHERE id = $id AND attempt = $attempt`). If an update affects zero rows, a newer attempt has superseded this run (e.g. the laptop slept past its lease): the worker stops the job immediately, uploads nothing more, and marks its job `cancelled`.
 
 ### 5.2 SourceAdapter
 
@@ -333,8 +336,8 @@ class TTSProvider(Protocol):
 ```
 
 - `vieneu` provider: VieNeu v3 Turbo; default device `cuda` (spike S3 on the GTX 1650: sequential RTF 0.22, batch RTF 0.13, first sentence 0.52 s). The ONNX CPU fallback is used only when CUDA is unavailable and is unverified: S3 could not load the ONNX model (huggingface_hub 2.x symlinked cache fails onnxruntime's external-data path check). M2 must load the ONNX model from a real `local_dir` (or pin `huggingface_hub<1.0`) and re-benchmark CPU RTF before relying on it. Speaks with `voice=preset_name` by default and clones from an emotion ref only for enabled pairs (5.3 step 4, 5.10). S3 measured presets only; M2 re-measures RTF with `ref_audio` cloning (`infer_batch` takes one `ref_audio`, so it cannot batch segments that use different refs). Sampling via `infer(temperature=...)` (v3 Turbo default `0.8`; no seed parameter): `0.8` for neutral, up to `0.95` scaled by intensity for expressive segments.
-- Per segment: retry once on failure; then retry with the voice's preset without a ref (`voice=preset_name`); then with the default narrator preset; record a warning. A segment never blocks the chapter.
-- Quality guard per segment (metric defined in the M0 results doc, "S1 female-noise debug"): VieNeu output noise varies per sample and per preset. Metric: mono 48 kHz; 40 ms Hann frames, hop 20 ms; keep frames with RMS ≥ 0.03 and zero-crossing rate ≤ 0.06 (vowel-like); per frame ratio = power(4-12 kHz) / power(0-4 kHz); segment value = median over kept frames. Threshold (starting value, tune in M2): re-synthesize the segment if its median ratio > 2.5 × the voice's baseline, where baseline = the same median measured over that preset's neutral reference audio (the preset's own neutral output, e.g. `assets/voice-refs/m0/base/*.wav`). Max 2 retries; keep the take with the lowest ratio. Segments with no kept frames skip the guard.
+- Per segment: retry once on failure; then retry with the voice's neutral form (preset voices: `voice=preset_name` without a ref; clone voices, which have no preset: the clone's `neutral` ref); then with the default narrator preset; record a warning. A segment never blocks the chapter.
+- Quality guard per segment (metric defined in the M0 results doc, "S1 female-noise debug"): VieNeu output noise varies per sample and per preset. Metric: mono 48 kHz; 40 ms Hann frames, hop 20 ms; keep frames with RMS ≥ 0.03 and zero-crossing rate ≤ 0.06 (vowel-like); per frame ratio = power(4-12 kHz) / power(0-4 kHz); segment value = median over kept frames. Threshold (starting value, tune in M2): re-synthesize the segment if its median ratio > 2.5 × the voice's baseline, where baseline = the same median measured over the voice's neutral reference audio: for preset voices the preset's own neutral output clip (the M0 base clip, `assets/voice-refs/m0/base/{narrator,male,female}.wav`, measured 0.56 / 0.62 / 0.41 ×1e-3), not a VoxCPM2 ref; for clone voices the clone's `neutral` ref. Baselines are computed once per voice and cached. Max 2 retries; keep the take with the lowest ratio. Segments with no kept frames skip the guard, which includes most whisper segments (their ZCR exceeds 0.06); M2 tunes the threshold on real chapters, including cloned and whisper segments.
 - Post-processing per segment: trim leading/trailing silence, loudness-normalize, append an emotion-dependent pause (neutral 250 ms, sad/tender 450 ms, angry/shout 150 ms; paragraph end +200 ms).
 - Encoding (spike S2): one long-lived ffmpeg/libopus process per chapter, fed segment PCM (float32 mono 48 kHz) on stdin in order, WebM read from stdout:
 
@@ -346,7 +349,7 @@ class TTSProvider(Protocol):
   ```
 
   `-cluster_size_limit 50000000` is required: with pipe output and the default size limit, ffmpeg cuts clusters at ~32 KiB (the final review measured 25 clusters instead of 4 for 90 s of speech), so `-cluster_time_limit` alone does not control the cut. `-flush_packets 1` makes ffmpeg write each cluster to the pipe promptly instead of buffering it.
-- The worker parses the EBML stream from stdout incrementally, uploads `init.webm` (bytes before the first Cluster) first, then each cluster as `seg-{0000}.webm` as soon as it is complete, appends it to `chapter_audio.chunks`, and sets `status='partial'`. Cluster cut points and `start_ms`/`end_ms` are read from the muxed stream (ffmpeg cuts about 19 ms before the limit); the worker never assumes cluster N == text chunk N. All keys use the row's current `{attempt}` (4.3). On completion: produce the seekable `full.webm` by remux (4.3), upload it, then set `full_key`, `duration_ms`, final `segments`, `status='ready'`. Only a one-shot offline encode was validated in S2; the incremental pipe path is an M2 exit criterion (8).
+- The worker parses the EBML stream from stdout incrementally, uploads `init.webm` (bytes before the first Cluster) first, then each cluster as `seg-{0000}.webm` as soon as it is complete, appends it to `chapter_audio.chunks`, and sets `status='partial'`. Cluster cut points and `start_ms`/`end_ms` are read from the muxed stream (ffmpeg cuts about 19 ms before the limit); the worker never assumes cluster N == text chunk N. All keys use the row's current `{attempt}` (4.3). On completion: produce the seekable `full.webm` by remux (4.3), upload it, then set `full_key`, `duration_ms`, final `segments`, `status='ready'` (fenced by attempt, 5.1). `duration_ms = round(total PCM samples fed to the encoder / 48)`, i.e. the signal length, not the container's buffered end. Only a one-shot offline encode was validated in S2; the incremental pipe path is an M2 exit criterion (8).
 - Synthesis order is sequential so the first cluster is ready within seconds of job start.
 
 ### 5.7 Scheduler
@@ -428,10 +431,10 @@ Command palette (`Ctrl+K`): search library and chapters, run commands, paste a t
 ### 6.5 Audio engine
 
 - Primary: `MediaSource` + one `SourceBuffer('audio/webm; codecs="opus"')` in `segments` mode. The player appends `init.webm` once, then the cluster media segments (`seg-*`) in order as they become available, with no `timestampOffset` or append windows; `<audio>` element provides `preservesPitch`, `playbackRate`, seeking, and Media Session integration.
-- When the row reaches `ready`, the player sets `mediaSource.duration` from `duration_ms` (after the last append, before `endOfStream()`). Expected buffered end ≈ duration + ~21 ms (variant C measured 30.021 s for a 30.000 s signal); the player must not treat that tail as an error.
-- The player watches `chapter_audio` via Realtime; when `attempt` changes it discards the SourceBuffer and reloads the chapter from the new attempt's `init.webm` (keeping the playback position).
+- Duration: if the row is already `ready` when the player opens it, the player sets `mediaSource.duration = duration_ms / 1000` right after `sourceopen` and **before** the first append. It never lowers `duration` once frames are buffered (Chromium throws `InvalidStateError` when `duration` is set below the highest buffered timestamp), and for a `partial` row it leaves `duration` alone and lets `endOfStream()` finalize it after the last cluster is appended. Expected buffered end ≈ `duration_ms` + ~21 ms (variant C measured 30.021 s for a 30.000 s signal); the player must not treat that tail as an error.
+- The player watches `chapter_audio` via Realtime; when `attempt` changes it discards the SourceBuffer and reloads the chapter from the new attempt's `init.webm`, resuming at the same **segment index** (not the same time, because a new attempt has different timing).
 - When `full_key` exists and MSE errors, fall back to the full file (seekable remux, 4.3).
-- Signed URLs (1 h TTL) from `GET /api/audio/[chapterAudioId]/urls`, which returns URLs for `init_key`, every key in `chunks` (segments, in order) and `full_key` when present, all for the row's current `attempt`; on 403 the player refreshes URLs once.
+- Signed URLs (10 min TTL, 7.3.1) from `GET /api/audio/[chapterAudioId]/urls`, which returns URLs for `init_key`, every key in `chunks` (segments, in order) and `full_key` when present, all for the row's current `attempt`; on 403 the player refreshes URLs once.
 - Edge TTS fallback: `GET /api/fallback-tts?chapterId=&segment=` streams MP3 for one segment; player plays segments sequentially with a plain `<audio>` element; single voice; nothing persisted.
 - Spike S2 outcome (validated in the Claude desktop browser pane, Chromium 152; owner's browser unrecorded; Edge/Firefox untested): independently encoded WebM chunks clicked audibly at boundaries in both `sequence` mode and `segments` mode with offsets + append windows, so they are rejected. Shared-init cluster segments from one continuous encode played with no click at any boundary (sine and speech) and are the chosen design. C was produced by a one-shot offline encode; the incremental pipe encode is validated in M2 (8).
 
@@ -459,7 +462,7 @@ Command palette (`Ctrl+K`): search library and chapters, run commands, paste a t
 | Truyenfull markup change | `ParserBroken`: job fails with a clear message; never synthesize empty text |
 | Cloudflare block | `SourceBlocked`: backoff retries; source flagged degraded in UI |
 | Segment TTS failure | Retry → same voice preset without ref → default narrator preset; warning recorded; chapter continues |
-| Worker crash mid-job | Lease expiry requeues; the re-run increments `chapter_audio.attempt`, resets `init_key`/`chunks`, and writes under a new `{attempt}` key prefix (4.3, 5.1). Re-runs are not reproducible (VieNeu has no seed), so earlier objects are never reused or overwritten; the player reloads on `attempt` change; GC removes abandoned attempts |
+| Worker crash mid-job | Lease expiry requeues; the re-run increments `chapter_audio.attempt`, resets `init_key`/`chunks`/`full_key`/`duration_ms`, and writes under a new `{attempt}` key prefix (4.3, 5.1); a resumed stale run is stopped by attempt fencing (5.1). Re-runs are not reproducible (VieNeu has no seed), so earlier objects are never reused or overwritten; the player reloads on `attempt` change; GC removes abandoned attempts |
 | R2 upload failure | Retry with backoff; chapter stays `partial` |
 | LLM invalid output | Next strategy in chain |
 | Gemini quota | Per-minute wait or per-day model lock; then local LLM; then heuristic |
@@ -477,6 +480,34 @@ UI copy: Vietnamese, sentence case, no raw exception strings, errors say what ha
 - Sign-up disabled; single user created in the Supabase dashboard.
 - `.env` files are gitignored (root pattern `.env` already covers `worker/.env` and `web/.env*`).
 
+### 7.3.1 Cost and abuse protection (owner requirement, 2026-10-15)
+
+The Cloudflare account behind R2 has the owner's bank card attached, and R2 bills usage beyond the free tier (storage > 10 GB-month, Class A > 1M ops/month, Class B > 10M ops/month) with no hard spending cap. Every milestone must keep a leaked credential or a runaway loop from turning into a bill.
+
+Account level (owner, done once; checked in M1 Task 9 and M6):
+- Repository stays public (owner decision, 2026-10-15). No per-commit secret-scanning hook is added; instead M6 runs one full secret scan of the whole git history before the project is called done, and every push in between is checked by the controller for `.env`/credential files and key patterns.
+- 2FA on Cloudflare, Supabase, GitHub and (later) Vercel.
+- Cloudflare usage-based billing notifications for R2 at roughly 80% of each free allowance.
+- A card with a low online spending limit (or a virtual card) for Cloudflare.
+- R2 bucket stays private: no `r2.dev` public URL, no custom domain; CORS limited to the app origins (M3).
+- R2 tokens scoped to the single bucket; worker token read/write, web token read-only; rotate immediately if either leaks.
+- The Gemini key's Google project has no billing account attached (free tier only, so overuse fails instead of charging).
+- Vercel stays on Hobby (no card); if ever upgraded, spend management is configured before deploying.
+
+Built into the code:
+- Storage cap (M2): the worker records the byte size of every object it uploads (`chapter_audio`) and refuses new uploads when the recorded total exceeds `R2_MAX_BYTES` (default 8 GiB). Synthesis jobs then fail with a clear Vietnamese message; nothing is uploaded.
+- Write-ops cap (M2): the worker counts its R2 PUTs per calendar month in Postgres and stops uploading above `R2_MAX_PUTS_PER_MONTH` (default 800,000).
+- Kill switch (M2): `R2_UPLOADS_ENABLED=false` in `worker/.env` stops all uploads without stopping the worker.
+- Queue limits (M2): a database trigger rejects new `jobs` rows when the owner already has 500 `queued` jobs, so a client bug or a stolen session cannot enqueue unbounded synthesis.
+- Read-ops control (M3): signed URLs live 10 minutes (not 1 h); audio keys are immutable, so objects are served with `Cache-Control: public, max-age=31536000, immutable` and the browser re-uses them instead of re-reading R2; the signed-URL route handler is rate limited per user (60 requests/minute, counted in Postgres).
+- Route rate limits (M3/M5): every route handler that reaches R2 or Edge TTS is authenticated and rate limited; Supabase Auth's own sign-in rate limits stay enabled.
+- Lifecycle (M2): an R2 lifecycle rule deletes `_doctor/` probes after 1 day; GC (4.2) removes stale audio.
+- Visibility (M5): Settings → Worker shows recorded R2 bytes and monthly PUTs against the caps.
+- Jobs write constraints (M2, before the job loop consumes web-enqueued jobs): a trigger/check so `authenticated` may only INSERT jobs with `status='queued'`, `attempts=0`, `max_attempts<=3`, `priority in (0,10,20)`, and null `worker_id`/`lease_until`/`result`/`error`; UPDATE by `authenticated` is limited to `status → 'cancelled'` (and `failed → queued` for retry, which resets nothing else); the 500-queued cap applies to both INSERT and UPDATE; a partial unique index dedupes `synthesize` jobs on `(user_id, payload->>'chapter_id', payload->>'voice_hash')` where `status in ('queued','running')`, so prefetch cannot trigger repeated re-attempts.
+- R2 object ledger (M2, before the storage cap): an append-only, worker-only table `r2_objects (key text primary key, bytes bigint not null, created_at, deleted_at)` with no foreign keys to user tables (so cascade deletes of novels/chapters/voices cannot hide objects); the storage cap sums live rows; deleting a novel/chapter/voice enqueues R2 cleanup jobs instead of silently orphaning objects; GC (4.2) works from this ledger.
+- Default privileges (M2's first migration): `alter default privileges in schema public revoke execute on functions from public, anon, authenticated;` and revoke `truncate, trigger, references` on all tables (and defaults) from `authenticated`; pgTAP asserts every public table has RLS enabled and function privileges match an explicit allow-list.
+- Storage API (M2): `R2Storage.put_bytes` returns the byte count and accepts `cache_control` (audio objects use `public, max-age=31536000, immutable`); `Settings` gains `r2_uploads_enabled`, `r2_max_bytes`, `r2_max_puts_per_month`.
+
 ### 7.4 Testing
 
 - Worker (`pytest`): truyenfull fixtures (saved real HTML for novel page, TOC pages, chapters); golden tests for normalization and segmentation (dotted obfuscation, dash-led dialogue, nested quotes, long sentences); schema validation for strategy output with a fake LLM; rate limiter with a fake clock and simulated 429 types; `claim_job` concurrency against local Supabase (`supabase start`); audio chunking timing math (cluster cut points read from the muxed stream); segment quality-guard ratio on fixtures.
@@ -488,8 +519,8 @@ UI copy: Vietnamese, sentence case, no raw exception strings, errors say what ha
 ### 7.5 Deployment
 
 - Vercel project root `web/`, region `sin1`, preview deploys per PR. Env: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `R2_ACCOUNT_ID`, `R2_READ_ACCESS_KEY_ID`, `R2_READ_SECRET_ACCESS_KEY`, `R2_BUCKET`.
-- Supabase project in `ap-southeast-1`; migrations via Supabase CLI; Realtime enabled for `jobs`, `chapter_audio`, `worker_status`.
-- R2 bucket private; two API tokens (worker read/write, Vercel read-only).
+- Supabase: the existing v1 project is reused (owner decision, M1). Its first v2 migration drops the v1 tables (`novels`, `reading_progress`, function `update_updated_at`) after an owner-confirmed backup, then creates the v2 schema. Migrations via Supabase CLI; Realtime enabled for `jobs`, `chapter_audio`, `worker_status`; email sign-up disabled; the owner's account signs in with email + password.
+- R2 bucket private (no `r2.dev` URL, no custom domain); two API tokens scoped to the bucket (worker read/write, Vercel read-only); cost and abuse protections in 7.3.1.
 
 ---
 
@@ -500,8 +531,8 @@ Each milestone gets its own implementation plan (writing-plans skill).
 | # | Milestone | Exit criteria |
 |---|---|---|
 | M0 | Spikes | **Done** (2026-10-14). Results and decisions: `docs/superpowers/spikes/2026-10-14-m0-results.md`. S1 PASS by count rule, applied per pair (5 pairs enabled; female/happy and female/sad provisional), tags dropped; S2 shared-init cluster segments PASS (one-shot offline encode); S3 GPU OK (CPU unverified). Validation refs archived in `assets/voice-refs/m0/`. |
-| M1 | Foundation | Repo restructured, v1 removed, Supabase schema + RLS + `claim_job`, auth with single user, R2 bucket + tokens, CI green |
-| M2 | Worker core | Job loop with leases/heartbeat, truyenfull adapter with fixtures (prefix-matched `ads*` removal, end-anchored SEO strip), normalize + segment, heuristic strategy, VieNeu single-voice synthesis with quality guard (5.6 metric + threshold), RTF re-measured with `ref_audio` cloning (S3 measured presets only), ONNX CPU load fix + CPU RTF re-benchmark, `--fake-tts`. **Incremental encode validated:** per-segment PCM fed to one long-lived ffmpeg/libopus process with the 5.6 flags, clusters emitted and parsed incrementally from the pipe, uploaded as they appear, and played gaplessly through the M3 continuity test. `attempt` re-run path and seekable `full.webm` remux tested |
+| M1 | Foundation | **Done** (2026-10-15; owner account checks of 7.3.1 and cloud sign-in pending): v2 schema live on the reused project (migrations applied through the Management API because the CLI login-role path fails on this project; history recorded in `supabase_migrations.schema_migrations`), sign-up disabled, R2 bucket + tokens verified by `worker doctor`, CI green (https://github.com/TuanBew/AI-Truyen-Audio-Reader/actions/runs/38686602652). Original criteria: repo restructured, v1 removed, Supabase schema + RLS + `claim_job`, auth with single user, R2 bucket + tokens, CI green |
+| M2 | Worker core | Job loop with leases/heartbeat, truyenfull adapter with fixtures (prefix-matched `ads*` removal, end-anchored SEO strip), normalize + segment, heuristic strategy, VieNeu single-voice synthesis with quality guard (5.6 metric + threshold), RTF re-measured with `ref_audio` cloning (S3 measured presets only), ONNX CPU load fix + CPU RTF re-benchmark, `--fake-tts`. **Incremental encode validated:** per-segment PCM fed to one long-lived ffmpeg/libopus process with the 5.6 flags, clusters emitted and parsed incrementally from the pipe, uploaded as they appear, and played gaplessly through the M3 continuity test. `attempt` re-run path and seekable `full.webm` remux tested. Cost/abuse prerequisites from 7.3.1 (jobs write constraints + dedupe, r2_objects ledger, default privileges, storage API caps) land before the job loop and uploads. |
 | M3 | Web core | Library, novel page, reader layout A, MSE player (shared init + clusters, `duration` from `duration_ms`, reload on `attempt` change) with highlight + auto-scroll, AudioWorklet continuity test, progress, prefetch, worker-offline state |
 | M4 | Multi-voice + emotion | Gemini strategy + rate limiter, local LLM strategy, roster merge, cast drawer + speaker reassignment, voice bank + per-pair emotion refs (5 pairs from S1, preset voice elsewhere; no non-verbal tags), **female/happy + female/sad re-test** against a clone-from-neutral-ref baseline (disable if not audible beyond the timbre shift), notebook |
 | M5 | Features | Lexicon (global + novel), bookmarks + notes, stats, sleep timer, follow + scheduler, theme customizer, command palette, Edge fallback |
