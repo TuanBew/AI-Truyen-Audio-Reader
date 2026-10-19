@@ -18,7 +18,7 @@ AudioTruyen v2 is a **private, single-user** web app for reading and listening t
 | Audience | One user (the owner). Private app, sign-up disabled. Not a public distribution service. |
 | Primary usage | Desktop, reading while listening. Sentence/segment highlight is the core experience. PWA/offline is a non-goal. |
 | Voice | Multi-voice: narrator + per-character dialogue voices (male/female defaults, per-character overrides). Default Southern presets: narrator "Đức Trí", male "Thái Sơn", female "Mỹ Duyên". |
-| Speaker attribution | Three pluggable strategies, chained: cloud LLM (Gemini free tier) → local LLM (llama.cpp, CPU) → heuristic. |
+| Speaker attribution | Three pluggable strategies, chained: cloud LLM (OpenRouter, free `nvidia/nemotron-3.5-super-vl:free`; owner decision 2026-10-19, replaces Gemini) → local LLM (llama.cpp, CPU) → heuristic. |
 | Emotion | Layered: LLM labels emotion per segment → VieNeu clones from a per-emotion reference clip only for the (voice, emotion) pairs enabled after spike S1 (narrator/angry, male/angry, male/whisper; female/happy and female/sad **provisional** until the M4 re-test). Every other segment, including `neutral`, is spoken by the preset voice itself (`voice=` preset id, no clone; the VoxCPM2 neutral clip is not used) → prosody post-processing. Non-verbal tags dropped (S1). |
 | TTS engine | VieNeu-TTS v3 Turbo (Apache-2.0), local, CUDA by default (verified in S3); ONNX CPU fallback must be verified in M2. |
 | Audio storage | Cloudflare R2. Fallback when worker is offline: Microsoft Edge TTS, single voice, not persisted. |
@@ -69,11 +69,19 @@ Personal-use note: reading the HTML skips the site's ad monetization. This is ac
 | Fish Audio S2 Pro | Non-commercial | Yes | No (4B + 400M) | Best | Rejected |
 | V-TTS (Valtec) | Open | Yes, 74.8M params | Yes, CPU | Limited | Noted as emergency fallback only |
 
-### 2.3 Gemini free tier
+### 2.3 Gemini free tier (superseded by 2.4)
 
 - Limits are per **project**, not per key; RPD resets at midnight **Pacific time**.
 - Free-tier quotas are low and volatile (Flash cut to ~20 RPD in Dec 2025; Flash-Lite reported ~15 RPM / 500 RPD on 2026-10-13). 429s can occur below the displayed quota.
 - Model IDs change over time. The worker must discover available models at startup, never hardcode a single ID.
+
+### 2.4 OpenRouter free models (current cloud LLM)
+
+Verified 2026-10-19 with the owner's key:
+- `nvidia/nemotron-3.5-super-vl:free`: price 0 for prompt and completion, ~1M-token context, supports `response_format` / `structured_outputs`, `temperature`, `max_tokens`, `seed`. A paid twin `nvidia/nemotron-3.5-super-vl` exists with the same name minus `:free`.
+- Free-model limits are per account and depend on all-time credits purchased: this account reports `free_model_daily_requests.limit = 50` (counter resets at 00:00 UTC); the per-minute limit for free models is about 20 requests and is not reported by the API.
+- The account has purchased credits (`is_free_tier: false`) and the key carries a per-key credit limit (50 USD at verification time). Any request to a non-`:free` model would be billed against it, so the code must make that impossible (5.5, 7.3.1).
+- `GET /api/v1/key` returns `free_model_daily_requests {used, limit, remaining}`, `limit_remaining` and `usage`; the worker reads it to seed and cross-check its own counters.
 
 ---
 
@@ -97,7 +105,7 @@ Personal-use note: reading the HTML skips the site's ad monetization. This is ac
 ┌───────────────┴───────────────────────────────┴────────────────┐
 │ worker/ (owner's Windows laptop, Python 3.12 + uv)             │
 │ jobs loop · sources · text · speakers · tts · audio · scheduler│
-│ VieNeu (CUDA|ONNX) · llama.cpp (CPU) · Gemini client · ffmpeg  │
+│ VieNeu (CUDA|ONNX) · llama.cpp (CPU) · OpenRouter client · ffmpeg │
 └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -112,12 +120,12 @@ worker/              Python worker (uv project)
     jobs/            claim loop, handlers, leases, heartbeat
     sources/         SourceAdapter + truyenfull
     text/            normalize, lexicon, segment
-    speakers/        strategies: gemini, local_llm, heuristic; chain
+    speakers/        strategies: openrouter, local_llm, heuristic; chain
     tts/             TTSProvider + vieneu
     audio/           post-processing, chunking, encoding
     storage/         R2 client
     scheduler/       follow checks
-    llm/             Gemini client + rate limiter
+    llm/             OpenRouter client + rate limiter + free-model guard
   tests/
 supabase/
   migrations/
@@ -217,6 +225,8 @@ worker_status (worker_id text pk, last_seen timestamptz, version text,
 
 llm_usage (model text, day_pt date, requests int, tokens int,
            locked_until timestamptz null, primary key (model, day_pt))
+                                               -- day_pt holds the provider's quota day (UTC for OpenRouter);
+                                               -- the column name predates the switch and is kept (migration applied)
 
 progress (novel_id pk-part, user_id pk-part, chapter_id, segment_index int,
           position_ms int, updated_at)
@@ -267,7 +277,7 @@ voices/{voice_id}/{emotion}.wav
 
 ### 5.1 Job loop
 
-- On start: register in `worker_status`, discover Gemini models, load VieNeu lazily on first `synthesize`.
+- On start: register in `worker_status`, check the configured OpenRouter models and the key (`GET /api/v1/key`, `GET /api/v1/models`), load VieNeu lazily on first `synthesize`.
 - Wake sources: Supabase Realtime subscription on `jobs` inserts + 30 s polling fallback.
 - Heartbeat every 15 s: updates `worker_status`, extends `lease_until` of the current job, calls `requeue_expired_jobs()`.
 - One job at a time. Lease 5 min, extended by heartbeat.
@@ -309,22 +319,23 @@ class SpeakerStrategy(Protocol):
     def analyze(self, segments: list[Segment], roster: list[Character]) -> list[SegmentLabel]: ...
 ```
 
-Chain order configurable in settings (default: `gemini → local_llm → heuristic`). A strategy result is accepted only if it passes JSON-schema validation and covers every segment id; otherwise the next strategy runs.
+Chain order configurable in settings (default: `openrouter → local_llm → heuristic`). A strategy result is accepted only if it passes JSON-schema validation and covers every segment id; otherwise the next strategy runs.
 
-- **gemini**: one request per chapter. Input: numbered segments + compact roster. Output: compact JSON array `[[i, speaker, gender, emotion, intensity]]` plus `new_characters`. No non-verbal tags (dropped after spike S1). Uses structured output (response schema) where the model supports it.
+- **openrouter**: one request per chapter (OpenAI-compatible `POST https://openrouter.ai/api/v1/chat/completions`). Input: numbered segments + compact roster. Output: compact JSON array `[[i, speaker, gender, emotion, intensity]]` plus `new_characters`. No non-verbal tags (dropped after spike S1). Uses `response_format` with a JSON schema (`structured_outputs`), `temperature` 0.2, a bounded `max_tokens`, and reasoning disabled or excluded so the answer fits the schema.
 - **local_llm**: llama.cpp (via `llama-cpp-python`) on CPU, Qwen-class 1.5-3B instruct GGUF Q4, same prompt and schema, processed in windows of ~40 segments. Model file path in `.env`; strategy is skipped if absent.
 - **heuristic**: dialogue speaker from adjacent attribution verbs (`nói`, `hỏi`, `quát`, `gầm lên`, `thì thầm`, ...) and the nearest name or pronoun (`anh/hắn/ông` → male, `cô/nàng/bà` → female); emotion from verb lexicon and punctuation (`!` → intensity up, `...` → sad/tender, `?` neutral). Unknown → `unknown` gender, `neutral`.
 
 Roster merge: new characters inserted; existing non-`manual` rows may update `gender` only when the new label has higher confidence; `manual` rows are never changed.
 
-### 5.5 Gemini client and rate limiting
+### 5.5 OpenRouter client and rate limiting
 
-- Models from `GEMINI_MODELS` env (ordered, default: newest Flash-Lite, then newest Flash), filtered at startup by `models.list`.
-- Limits per model from `GEMINI_LIMITS` env (`rpm`, `rpd`), applied at **80%** of the configured values.
-- `llm_usage` row per `(model, day_pt)` persists counts across restarts. Minimum spacing between requests = `60 / effective_rpm` seconds.
-- 429 handling: if the error's quota metric is per-minute, sleep for `RetryInfo.retryDelay` (default 60 s) and retry once; if per-day, set `locked_until` to next midnight Pacific and move to the next model. All models locked → next strategy.
-- Budget priority: jobs with priority 0-10 may use Gemini freely; priority 20 (background/new chapters) only when today's remaining budget is above 50%.
-- API key lives only in `worker/.env` (`GEMINI_API_KEY`), never committed, never sent to the web app.
+- Models from `OPENROUTER_MODELS` env (ordered; default `nvidia/nemotron-3.5-super-vl:free`). **Free-model guard:** the client refuses (at startup and per request) any model id that does not end in `:free`, refuses ids whose `GET /api/v1/models` pricing is not 0 for prompt and completion, sends `usage: {include: true}`, and if a response reports `usage.cost > 0` it disables the OpenRouter strategy until the owner re-enables it and records a warning.
+- Limits from `OPENROUTER_LIMITS` env (default `rpm=20, rpd=50`), applied at **80%** (16 RPM, 40 RPD). The daily counter is cross-checked against `free_model_daily_requests` from `GET /api/v1/key` at startup and every hour; the lower remaining value wins.
+- `llm_usage` row per `(model, day_pt)` persists counts across restarts (`day_pt` = UTC date for OpenRouter). Minimum spacing between requests = `60 / effective_rpm` seconds.
+- 429 handling: honour `Retry-After` when present; a per-minute 429 waits and retries once; a daily-limit 429 (or `remaining = 0`) sets `locked_until` to the next 00:00 UTC and moves to the next configured model. All models locked → next strategy. 402 (payment required) disables the strategy and records a warning; it must never trigger a retry on a paid model.
+- Budget priority: jobs with priority 0-10 may use OpenRouter freely; priority 20 (background/new chapters) only when today's remaining budget is above 50%.
+- Requests send `HTTP-Referer` and `X-Title: AudioTruyen`; `seed` is set for reproducibility where supported.
+- API key lives only in `worker/.env` (`OPENROUTER_API_KEY`), never committed, never logged, never sent to the web app.
 
 ### 5.6 TTS and audio
 
@@ -364,7 +375,7 @@ When the web app opens or advances to chapter N, it enqueues `fetch_chapter` and
 
 - `uv run worker` (foreground) or installed as a Windows service with NSSM (documented).
 - Requires `ffmpeg` on PATH. First run downloads VieNeu weights.
-- `.env`: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `GEMINI_API_KEY`, `GEMINI_MODELS`, `GEMINI_LIMITS`, `LOCAL_LLM_PATH` (optional), `WORKER_ID`.
+- `.env`: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `OPENROUTER_API_KEY`, `OPENROUTER_MODELS`, `OPENROUTER_LIMITS`, `LOCAL_LLM_PATH` (optional), `WORKER_ID`.
 - Logs: rotating file `worker/logs/worker.log`, level from env.
 - Flag `--fake-tts` produces sine tones of text-proportional length (for E2E tests).
 
@@ -442,7 +453,7 @@ Command palette (`Ctrl+K`): search library and chapters, run commands, paste a t
 
 - Giao diện: theme presets, seed editor, contrast readout, reading typography, import/export.
 - Giọng đọc: narrator / default male / default female selection from voice bank, preview playback, emotion reference status per voice, clip upload.
-- Phân tích: strategy order, today's Gemini usage per model vs limits, local LLM status.
+- Phân tích: strategy order, today's OpenRouter free-model usage vs limits (and the key's `limit_remaining`), local LLM status.
 - Phát âm: global lexicon editor (plain or regex), test field with "Nghe thử" (enqueues a tiny priority-0 synth job).
 - Worker: online status, device, queue (cancel/retry jobs), `prefetch_count`, `follow_interval_hours`, `auto_synthesize_new` default.
 - Tài khoản: email, password change, sign out.
@@ -465,7 +476,7 @@ Command palette (`Ctrl+K`): search library and chapters, run commands, paste a t
 | Worker crash mid-job | Lease expiry requeues; the re-run increments `chapter_audio.attempt`, resets `init_key`/`chunks`/`full_key`/`duration_ms`, and writes under a new `{attempt}` key prefix (4.3, 5.1); a resumed stale run is stopped by attempt fencing (5.1). Re-runs are not reproducible (VieNeu has no seed), so earlier objects are never reused or overwritten; the player reloads on `attempt` change; GC removes abandoned attempts |
 | R2 upload failure | Retry with backoff; chapter stays `partial` |
 | LLM invalid output | Next strategy in chain |
-| Gemini quota | Per-minute wait or per-day model lock; then local LLM; then heuristic |
+| OpenRouter quota | Per-minute wait or per-day model lock (00:00 UTC); 402 or non-zero cost disables the strategy; then local LLM; then heuristic |
 | Signed URL expiry | Player refreshes once on 403 |
 | MSE error | Full-file fallback if ready, else error state with retry |
 | Worker offline (`last_seen` > 60 s) | Banner, Edge TTS offer, jobs stay queued |
@@ -476,7 +487,7 @@ UI copy: Vietnamese, sentence case, no raw exception strings, errors say what ha
 ### 7.3 Security
 
 - Web uses only the anon key + user session; all access through RLS.
-- Service-role key, R2 credentials for writing, and the Gemini key exist only on the worker. R2 credentials on Vercel are read-only (presign GET only).
+- Service-role key, R2 credentials for writing, and the OpenRouter key exist only on the worker. R2 credentials on Vercel are read-only (presign GET only).
 - Sign-up disabled; single user created in the Supabase dashboard.
 - `.env` files are gitignored (root pattern `.env` already covers `worker/.env` and `web/.env*`).
 
@@ -491,7 +502,7 @@ Account level (owner, done once; checked in M1 Task 9 and M6):
 - A card with a low online spending limit (or a virtual card) for Cloudflare.
 - R2 bucket stays private: no `r2.dev` public URL, no custom domain; CORS limited to the app origins (M3).
 - R2 tokens scoped to the single bucket; worker token read/write, web token read-only; rotate immediately if either leaks.
-- The Gemini key's Google project has no billing account attached (free tier only, so overuse fails instead of charging).
+- OpenRouter: the account holds purchased credits, so the key's credit limit is set to a small value (1 USD or less) on openrouter.ai → Keys, and only `:free` models are allowed by the code (5.5); a non-zero `usage.cost` disables the strategy. Rotate the key if it is ever exposed (the 2026-10-19 key was pasted into a chat session, so rotate it before M4 goes live).
 - Vercel stays on Hobby (no card); if ever upgraded, spend management is configured before deploying.
 
 Built into the code:
@@ -534,7 +545,7 @@ Each milestone gets its own implementation plan (writing-plans skill).
 | M1 | Foundation | **Done** (2026-10-15; owner account checks of 7.3.1 and cloud sign-in pending): v2 schema live on the reused project (migrations applied through the Management API because the CLI login-role path fails on this project; history recorded in `supabase_migrations.schema_migrations`), sign-up disabled, R2 bucket + tokens verified by `worker doctor`, CI green (https://github.com/TuanBew/AI-Truyen-Audio-Reader/actions/runs/38686602652). Original criteria: repo restructured, v1 removed, Supabase schema + RLS + `claim_job`, auth with single user, R2 bucket + tokens, CI green |
 | M2 | Worker core | Job loop with leases/heartbeat, truyenfull adapter with fixtures (prefix-matched `ads*` removal, end-anchored SEO strip), normalize + segment, heuristic strategy, VieNeu single-voice synthesis with quality guard (5.6 metric + threshold), RTF re-measured with `ref_audio` cloning (S3 measured presets only), ONNX CPU load fix + CPU RTF re-benchmark, `--fake-tts`. **Incremental encode validated:** per-segment PCM fed to one long-lived ffmpeg/libopus process with the 5.6 flags, clusters emitted and parsed incrementally from the pipe, uploaded as they appear, and played gaplessly through the M3 continuity test. `attempt` re-run path and seekable `full.webm` remux tested. Cost/abuse prerequisites from 7.3.1 (jobs write constraints + dedupe, r2_objects ledger, default privileges, storage API caps) land before the job loop and uploads. |
 | M3 | Web core | Library, novel page, reader layout A, MSE player (shared init + clusters, `duration` from `duration_ms`, reload on `attempt` change) with highlight + auto-scroll, AudioWorklet continuity test, progress, prefetch, worker-offline state |
-| M4 | Multi-voice + emotion | Gemini strategy + rate limiter, local LLM strategy, roster merge, cast drawer + speaker reassignment, voice bank + per-pair emotion refs (5 pairs from S1, preset voice elsewhere; no non-verbal tags), **female/happy + female/sad re-test** against a clone-from-neutral-ref baseline (disable if not audible beyond the timbre shift), notebook |
+| M4 | Multi-voice + emotion | OpenRouter strategy (free-model guard) + rate limiter, local LLM strategy, roster merge, cast drawer + speaker reassignment, voice bank + per-pair emotion refs (5 pairs from S1, preset voice elsewhere; no non-verbal tags), **female/happy + female/sad re-test** against a clone-from-neutral-ref baseline (disable if not audible beyond the timbre shift), notebook |
 | M5 | Features | Lexicon (global + novel), bookmarks + notes, stats, sleep timer, follow + scheduler, theme customizer, command palette, Edge fallback |
 | M6 | Deploy + hardening | Vercel production, NSSM service docs, README rewrite, E2E suite in CI |
 
@@ -548,7 +559,7 @@ S2 outcome: independently encoded chunks failed (audible splice clicks), so audi
 | Risk | Mitigation |
 |---|---|
 | Truyenfull changes domain/markup or tightens Cloudflare | Adapter isolation, fixtures, `ParserBroken`/`SourceBlocked` surfacing, adapter interface for new sources |
-| Gemini free tier cut further | Rate limiter at 80%, per-chapter single request, cascade to local LLM/heuristic |
+| OpenRouter free model removed, limited or made paid | Free-model guard (`:free` suffix + pricing 0 + cost check), rate limiter at 80%, per-chapter single request, model list in env, cascade to local LLM/heuristic |
 | VieNeu emotion transfer weak | Confirmed partly in S1: refs enabled per (voice, emotion) pair only, preset voice + prosody elsewhere; female pairs re-tested in M4; `voxcpm2` remote provider possible behind `TTSProvider` |
 | Laptop off for long periods | Web stays usable for cached content; Edge fallback; Supabase kept alive only while worker runs (documented) |
 | R2 free 10 GB exhausted | ~2 MB/chapter at 48 kbps ≈ 5,000 chapters; GC of stale voice_hash audio after 30 days; usage shown in Settings → Worker |
