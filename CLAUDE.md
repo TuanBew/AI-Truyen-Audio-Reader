@@ -58,10 +58,10 @@ Web, from `web/`:
 
 `supabase db push` fails on this project: the CLI login role `cli_login_postgres` cannot be created (`DbConfigLoginRoleStatusError`). Use this procedure instead (the one used in M1). Project ref: `pvslnmyzdbntyuckmncs` (also in `supabase/.temp/project-ref`; not a secret).
 
+0. Ask the owner before every cloud apply; this changes their production database.
 1. Run `npx --yes supabase@2.121.0 test db` locally first; it must pass.
-2. For each new migration file, in order, POST its SQL to the Management API: `https://api.supabase.com/v1/projects/<project-ref>/database/query` with header `Authorization: Bearer <personal access token>` and JSON body `{"query": "<file contents>"}`. One request per file; it runs as `postgres` in one implicit transaction.
-3. Record it in the migration history (same endpoint):
-   `insert into supabase_migrations.schema_migrations (version, name) values ('<version>', '<name>') on conflict do nothing;`
-4. Verify with catalog queries: RLS enabled on all public tables, function ACLs, anon grants.
+2. List what is already applied (`select version from supabase_migrations.schema_migrations order by 1;`) and apply only newer files.
+3. For each new migration file, in order, POST to the Management API `https://api.supabase.com/v1/projects/<project-ref>/database/query` a single request whose SQL is the file contents followed by `insert into supabase_migrations.schema_migrations (version, name) values ('<version>', '<name>') on conflict do nothing;`, so applying and recording happen in one implicit transaction (it runs as `postgres`).
+4. Verify: the version is now listed in `supabase_migrations.schema_migrations`; RLS is enabled on every public table; function ACLs match the allow-list; anon has no table grants.
 
-The token is the owner's CLI token (Windows Credential Manager target `Supabase CLI:supabase`) or a token the owner creates. Never print or commit it, and delete any temp file that held it.
+Token handling: use the owner's CLI token (Windows Credential Manager target `Supabase CLI:supabase`) or a short-lived token the owner creates. Never put it on a command line (process lists and shell history keep it): pass it to `curl` through a header file (`-H @file`) or read it inside a script. Never print or commit it, and delete any temp file that held it immediately after use.
