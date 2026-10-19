@@ -41,3 +41,4 @@ backup/
 # Local tooling (launch.json is force-added on purpose)
 .claude/
 .superpowers/
+.wrangler/
