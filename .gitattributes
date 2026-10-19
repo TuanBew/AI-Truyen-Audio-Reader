@@ -1,2 +1,4 @@
 * text=auto
 *.sh text eol=lf
+# Recorded HTML fixtures must stay byte-exact (no CRLF conversion)
+worker/tests/fixtures/** -text
