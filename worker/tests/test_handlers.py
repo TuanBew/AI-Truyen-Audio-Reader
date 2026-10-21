@@ -160,13 +160,40 @@ def test_fetch_chapter_saves_text_and_analysis():
     assert [s["src"] for s in segments] == [[0, 12], [13, 28], [29, 42]]
 
 
+class CountingStrategy(HeuristicStrategy):
+    """Heuristic labels, but counts analyze() calls (a stand-in for a quota-billed LLM strategy)."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def analyze(self, segments, roster):
+        self.calls += 1
+        return super().analyze(segments, roster)
+
+
 def test_fetch_chapter_skips_unchanged_text_and_existing_analysis():
     row = ChapterRow(CHAPTER, USER, "novel-uuid", 1, "u", text_hash(TEXT))
     store = FakeStore(chapter_row=row, analysis=True)
-    make_handlers(FakeAdapter(text=TEXT), store, [HeuristicStrategy()])["fetch_chapter"](
+    strategy = CountingStrategy()
+    result = make_handlers(FakeAdapter(text=TEXT), store, [strategy])["fetch_chapter"](
         job("fetch_chapter", {"chapter_id": CHAPTER}), JobContext(job())
     )
+    assert result == {"chars": len(TEXT), "segments": 3, "strategy": "heuristic"}
     assert store.saved_text is None and store.saved_analysis is None
+    assert strategy.calls == 0  # a cached analysis must not re-run the chain
+
+
+def test_fetch_chapter_analyzes_unchanged_text_without_cached_analysis():
+    row = ChapterRow(CHAPTER, USER, "novel-uuid", 1, "u", text_hash(TEXT))
+    store = FakeStore(chapter_row=row, analysis=False)
+    strategy = CountingStrategy()
+    make_handlers(FakeAdapter(text=TEXT), store, [strategy])["fetch_chapter"](
+        job("fetch_chapter", {"chapter_id": CHAPTER}), JobContext(job())
+    )
+    assert store.saved_text is None
+    assert strategy.calls == 1
+    assert store.saved_analysis[:2] == ("heuristic", 1)
+    assert len(store.saved_analysis[2]) == 3
 
 
 @pytest.mark.parametrize(

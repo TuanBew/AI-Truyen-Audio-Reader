@@ -95,12 +95,19 @@ def make_handlers(
         if digest != row.text_hash:
             store.save_chapter_text(row.id, content.text, digest)
         segments = segment_text(content.text)
+        # Look for a cached analysis before running the chain: an LLM strategy bills quota per run.
+        for strategy in strategies:
+            if store.has_analysis(row.id, digest, strategy.name, strategy.version):
+                return {
+                    "chars": len(content.text),
+                    "segments": len(segments),
+                    "strategy": strategy.name,
+                }
         result = run_chain(strategies, segments, store.roster(row.novel_id))
-        if not store.has_analysis(row.id, digest, result.strategy, result.version):
-            store.save_analysis(
-                job.user_id, row.id, digest, result.strategy, result.version,
-                analysis_document(segments, result.labels),
-            )  # fmt: skip
+        store.save_analysis(
+            job.user_id, row.id, digest, result.strategy, result.version,
+            analysis_document(segments, result.labels),
+        )  # fmt: skip
         return {"chars": len(content.text), "segments": len(segments), "strategy": result.strategy}
 
     return {"search": search, "fetch_novel": fetch_novel, "fetch_chapter": fetch_chapter}
