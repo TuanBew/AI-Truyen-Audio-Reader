@@ -8,10 +8,10 @@ values ('aaaaaaaa-0000-0000-0000-000000000001', '11111111-1111-1111-1111-1111111
 insert into public.chapters (id, user_id, novel_id, index, title, url)
 values ('cccccccc-0000-0000-0000-000000000001', '11111111-1111-1111-1111-111111111111', 'aaaaaaaa-0000-0000-0000-000000000001', 1, 'Chương 1', 'u1');
 
-insert into public.jobs (id, user_id, type, priority, created_at, run_after) values
-  ('10000000-0000-0000-0000-000000000001', '11111111-1111-1111-1111-111111111111', 'synthesize', 10, now() - interval '3 minutes', now()),
-  ('10000000-0000-0000-0000-000000000002', '11111111-1111-1111-1111-111111111111', 'fetch_novel', 0, now() - interval '1 minute', now()),
-  ('10000000-0000-0000-0000-000000000003', '11111111-1111-1111-1111-111111111111', 'fetch_novel', 0, now() - interval '2 minutes', now() + interval '1 hour');
+insert into public.jobs (id, user_id, type, payload, priority, created_at, run_after) values
+  ('10000000-0000-0000-0000-000000000001', '11111111-1111-1111-1111-111111111111', 'synthesize', '{"chapter_id": "cccccccc-0000-0000-0000-000000000001", "voice_hash": "h1"}', 10, now() - interval '3 minutes', now()),
+  ('10000000-0000-0000-0000-000000000002', '11111111-1111-1111-1111-111111111111', 'fetch_novel', '{}', 0, now() - interval '1 minute', now()),
+  ('10000000-0000-0000-0000-000000000003', '11111111-1111-1111-1111-111111111111', 'fetch_novel', '{}', 0, now() - interval '2 minutes', now() + interval '1 hour');
 
 -- claim_job: priority first, run_after respected
 select is((select id from public.claim_job('w1', 300)), '10000000-0000-0000-0000-000000000002'::uuid, 'claims the due priority-0 job first');
