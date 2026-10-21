@@ -15,6 +15,9 @@ _LETTER = r"[^\W\d_]"
 _DOTTED = re.compile(rf"(?<![\w.])({_LETTER}{{1,2}}(?:\.{_LETTER}{{1,2}})+)(?![\w]|\.\w)")
 # Words censored with asterisks, e.g. "g**t ch*t".
 _ASTERISK_WORD = re.compile(rf"(?<!\w){_LETTER}*\*+{_LETTER}*(?:\*+{_LETTER}*)*(?!\w)")
+# A token is censored only if an asterisk run sits between two letters ("g**t", "đ**m");
+# "*Bốp*", "Thiên*" or a lone "*" are emphasis, sound effects or footnote markers.
+_CENSOR_INFIX = re.compile(rf"{_LETTER}\*+{_LETTER}")
 CENSORED = {"g**t": "giết", "g*t": "giết", "ch*t": "chết", "ch**t": "chết"}
 
 
@@ -40,10 +43,13 @@ def deobfuscate(text: str) -> str:
 
 
 def uncensor(text: str) -> str:
-    """Restore known asterisk-censored words; drop unknown ones (never read them as noise)."""
+    """Restore known asterisk-censored words; drop unknown ones (never read them as noise).
+    Other tokens touching asterisks ("*Bốp*", "Thiên*", "***") only lose the asterisks."""
 
     def repl(match: re.Match[str]) -> str:
         word = match.group(0)
+        if not _CENSOR_INFIX.search(word):
+            return word.replace("*", "")
         known = CENSORED.get(word.lower())
         if known is None:
             return ""

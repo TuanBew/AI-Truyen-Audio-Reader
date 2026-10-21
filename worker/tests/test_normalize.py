@@ -39,6 +39,9 @@ def test_deobfuscate(raw, expected):
         ("G**t hắn", "Giết hắn"),
         ("đồ đ**m kia", "đồ kia"),
         ("không có sao", "không có sao"),
+        ("*Bốp* một tiếng", "Bốp một tiếng"),
+        ("*nói nhỏ* thôi", "nói nhỏ thôi"),
+        ("Hạo Thiên* là ai", "Hạo Thiên là ai"),
     ],
 )
 def test_uncensor(raw, expected):
