@@ -57,7 +57,11 @@ def describe_failure(exc: BaseException) -> tuple[str, bool]:
     if isinstance(exc, NovelNotFound):
         return "Không tìm thấy truyện trên truyenfull (truyện có thể đã bị gỡ).", False
     if isinstance(exc, ParserBroken):
-        return f"Không đọc được trang truyenfull, có thể trang đã đổi cấu trúc ({exc}).", False
+        return (
+            "Không đọc được trang truyenfull, có thể trang đã đổi cấu trúc. "
+            "Xem worker/logs/worker.log.",
+            False,
+        )
     if isinstance(exc, SourceBlocked):
         return (
             "Truyenfull đang chặn truy cập tự động (Cloudflare) cho trang này. "
@@ -65,7 +69,7 @@ def describe_failure(exc: BaseException) -> tuple[str, bool]:
             True,
         )
     if isinstance(exc, SourceError):
-        return f"Không tải được trang truyenfull ({exc}). Worker sẽ thử lại sau.", True
+        return "Không tải được trang truyenfull. Worker sẽ thử lại sau.", True
     return (
         f"Lỗi không mong muốn trong worker ({type(exc).__name__}). Xem worker/logs/worker.log.",
         True,
@@ -123,7 +127,10 @@ class Runner:
             return  # the job was requeued by requeue_expired_jobs; nothing to write
         except KeyboardInterrupt:
             # Ctrl+C: hand the job back now instead of waiting for its lease to expire.
-            self.queue.fail(job.id, SHUTDOWN_MESSAGE, True)
+            try:
+                self.queue.fail(job.id, SHUTDOWN_MESSAGE, True)
+            except Exception:  # the lease expiry requeues it; never swallow the Ctrl+C
+                log.exception("could not hand job %s back", job.id)
             raise
         except Exception as exc:  # every failure is recorded on the job row
             message, retryable = describe_failure(exc)
@@ -136,9 +143,11 @@ class Runner:
         else:
             log.info("job %s done", job.id)
 
-    def cancel_current(self) -> None:
+    def cancel_current(self, job_id: str) -> None:
+        """Cancel the running job only if it is still job_id (a stale heartbeat must not
+        cancel the job claimed after it)."""
         with self._lock:
-            if self._current:
+            if self._current is not None and self._current.job.id == job_id:
                 self._current.cancelled.set()
 
     def beat(self, queue: Queue | None = None) -> None:
@@ -148,7 +157,7 @@ class Runner:
         owned = (queue or self.queue).heartbeat(self.version, self.device, job_id)
         if job_id and not owned:
             log.warning("lease lost for job %s; stopping it", job_id)
-            self.cancel_current()
+            self.cancel_current(job_id)
 
     def run_forever(self, stop: threading.Event) -> None:
         while not stop.is_set():

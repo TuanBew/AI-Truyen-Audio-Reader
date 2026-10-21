@@ -129,3 +129,50 @@ def test_context_check_raises_after_cancel():
     ctx.cancelled.set()
     with pytest.raises(JobCancelled):
         ctx.check()
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        SourceError("HTTP 502 for https://internal.example/zzleak"),
+        SourceBlocked("challenge zzleak"),
+        ParserBroken("no #chapter-c zzleak"),
+        NovelNotFound("zzleak"),
+        RuntimeError("[Errno 11001] getaddrinfo failed zzleak"),
+    ],
+)
+def test_failure_messages_never_contain_the_exception_text(exc):
+    message, _ = describe_failure(exc)
+    assert "zzleak" not in message and str(exc) not in message
+
+
+def test_stale_heartbeat_does_not_cancel_the_next_job():
+    first, second = JobContext(job()), JobContext(Job(id="j2", user_id=USER, type="search"))
+
+    class SwappingQueue(FakeQueue):
+        def heartbeat(self, version, device, job_id):
+            # While the RPC for j1 is in flight, the main thread finishes j1 and claims j2.
+            with runner._lock:
+                runner._current = second
+            return super().heartbeat(version, device, job_id)
+
+    queue = SwappingQueue()
+    queue.owned = False
+    runner = Runner(queue, {}, version="v", device="cpu")
+    with runner._lock:
+        runner._current = first
+    runner.beat()
+    assert queue.beats == ["j1"]
+    assert not second.cancelled.is_set()
+
+
+def test_keyboard_interrupt_survives_a_failed_hand_back():
+    class BrokenQueue(FakeQueue):
+        def fail(self, job_id, error, retryable):
+            raise RuntimeError("network down")
+
+    def interrupted(j, c):
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        Runner(BrokenQueue([job()]), {"search": interrupted}, version="v", device="cpu").run_once()
