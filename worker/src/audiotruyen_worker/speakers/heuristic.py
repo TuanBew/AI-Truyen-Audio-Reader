@@ -63,14 +63,25 @@ class HeuristicStrategy:
 
 def _attribution_context(segments: Sequence[Segment], seg: Segment) -> str:
     """Narration in the same paragraph right after the dialogue, else right before it.
+    Consecutive same-paragraph dialogue segments (a long quote split by the segmenter) are one
+    utterance, so the lookup starts from the ends of that run.
     Only narration that contains a speech verb counts as attribution."""
-    after = segments[seg.i + 1] if seg.i + 1 < len(segments) else None
-    before = segments[seg.i - 1] if seg.i > 0 else None
+    first = last = seg.i
+    while first > 0 and _same_run(segments[first - 1], seg):
+        first -= 1
+    while last + 1 < len(segments) and _same_run(segments[last + 1], seg):
+        last += 1
+    after = segments[last + 1] if last + 1 < len(segments) else None
+    before = segments[first - 1] if first > 0 else None
     for cand in (after, before):
         if cand and cand.kind == "narration" and cand.paragraph == seg.paragraph:
             if _SPEECH_VERB.search(cand.text):
                 return cand.text
     return ""
+
+
+def _same_run(other: Segment, seg: Segment) -> bool:
+    return other.kind == "dialogue" and other.paragraph == seg.paragraph
 
 
 def _find_speaker(context: str, names: list[tuple[str, Character]]) -> tuple[str | None, Gender]:

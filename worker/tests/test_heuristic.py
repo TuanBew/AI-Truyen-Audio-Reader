@@ -60,3 +60,13 @@ def test_chain_falls_through_to_the_first_valid_strategy():
 def test_chain_raises_when_every_strategy_fails():
     with pytest.raises(InvalidLabels):
         run_chain([_Broken()], segment_text("A.\nB."), [])
+
+
+def test_heuristic_long_quote_pieces_share_the_attribution():
+    quote = " ".join(["Ngươi tưởng ta không biết những chuyện ngươi đã làm sau lưng ta sao."] * 6)
+    segs = segment_text(f"“{quote}” Lâm Phong quát.")
+    labels = HeuristicStrategy().analyze(segs, [Character("Lâm Phong", "male")])
+    dialogue = [label for s, label in zip(segs, labels, strict=True) if s.kind == "dialogue"]
+    assert len(dialogue) >= 2
+    for label in dialogue:
+        assert (label.speaker, label.gender, label.emotion) == ("Lâm Phong", "male", "angry")
