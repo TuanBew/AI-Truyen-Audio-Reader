@@ -56,6 +56,35 @@ def test_store_upserts_are_idempotent_and_never_delete(admin_client, owner):
     assert novel["chapter_count"] == 3 and novel["last_checked_at"] is not None
 
 
+def test_store_toc_url_change_drops_stored_text(admin_client, owner):
+    """A chapter inserted mid-list on the site shifts indexes: the row at an index now points at a
+    different chapter, so its stored text must not survive."""
+    store = Store(admin_client)
+    novel_id = store.upsert_novel(owner["id"], INFO)
+    store.upsert_chapters(owner["id"], novel_id, _refs([1]))
+    chapter_id = (
+        admin_client.table("chapters").select("id").eq("novel_id", novel_id).execute().data[0]["id"]
+    )
+    first = store.chapter(chapter_id, owner["id"])
+    store.save_chapter_text(first.id, "nội dung", "h1")
+    moved = [ChapterRef(1, "Chương 1 mới", "https://truyenfull.live/a/chuong-1-moi/")]
+    store.upsert_chapters(owner["id"], novel_id, moved)
+    row = (
+        admin_client.table("chapters")
+        .select("url,text,text_hash,fetched_at")
+        .eq("id", first.id)
+        .execute()
+        .data[0]
+    )
+    assert row == {
+        "url": "https://truyenfull.live/a/chuong-1-moi/",
+        "text": None,
+        "text_hash": None,
+        "fetched_at": None,
+    }
+    assert store.chapter(first.id, owner["id"]).text_hash is None
+
+
 def test_store_chapter_is_scoped_to_the_owner(admin_client, owner):
     store = Store(admin_client)
     novel_id = store.upsert_novel(owner["id"], INFO)
