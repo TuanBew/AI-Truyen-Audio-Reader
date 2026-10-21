@@ -20,6 +20,8 @@ MIN_CHAPTER_CHARS = 500
 
 _NOISE_TAGS = {"script", "style", "noscript", "iframe"}
 _STATUS = {"full": "completed", "đang ra": "ongoing"}
+_BASE_URL = "https://truyenfull.live/"
+_SEARCH_EMPTY_MARKER = "Không tìm thấy"
 _WS = re.compile(r"[ \t\r\f\v\u00a0\u200b]+")
 # Trailing SEO keyword block, e.g. "truyen full, truyenfull, truyenfullvn, truyenfulllive".
 # Anchored to the end of the text and requires at least two keywords, so a sentence that merely
@@ -89,7 +91,9 @@ def parse_toc_page(html: str, page: int) -> TocPage:
     title = _text(tree.css_first('h3.title[itemprop="name"]'))
     if not (novel_id and slug and title):
         raise ParserBroken("novel page: missing truyen-id, truyen-ascii or title")
-    total_raw = _input_value(tree, "total-page") or "1"
+    total_raw = _input_value(tree, "total-page")
+    if total_raw is None:
+        raise ParserBroken("novel page: missing total-page")
     if not total_raw.isdigit() or int(total_raw) < 1:
         raise ParserBroken(f"novel page: bad total-page {total_raw!r}")
     total_pages = int(total_raw)
@@ -146,18 +150,26 @@ def parse_chapter_page(html: str) -> ChapterContent:
 
 
 def parse_search_page(html: str) -> list[NovelSummary]:
+    """Return the result rows; [] only when the page shows the real "no results" marker."""
     tree = LexborHTMLParser(html)
+    rows = tree.css("#list-page div.row[itemtype]")
+    if not rows:
+        if _SEARCH_EMPTY_MARKER in (_text(tree.css_first("#list-page")) or ""):
+            return []
+        raise ParserBroken("search page: no result rows and no empty-results marker")
     results = []
-    for row in tree.css("#list-page div.row[itemtype]"):
+    for row in rows:
         link = row.css_first("h3.truyen-title a")
-        if link is None:
-            continue
+        href = (link.attributes.get("href") or "") if link else ""
+        title = _text(link)
+        if not href.startswith(_BASE_URL) or not title:
+            raise ParserBroken(f"search page: bad result link {href!r}")
         cover = row.css_first("[data-image]")
         latest = row.css_first(".text-info a")
         results.append(
             NovelSummary(
-                url=link.attributes.get("href") or "",
-                title=_text(link) or "",
+                url=href,
+                title=title,
                 author=_text(row.css_first(".author")),
                 cover_url=cover.attributes.get("data-image") if cover else None,
                 latest_chapter=_text(latest),

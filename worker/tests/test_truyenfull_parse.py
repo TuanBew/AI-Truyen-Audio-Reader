@@ -78,6 +78,14 @@ def test_short_middle_page_is_parser_broken():
         parse_toc_page(fixture("novel_full_p8.html"), 7)
 
 
+def test_missing_total_page_is_parser_broken():
+    html = fixture("novel_full_p1.html")
+    marker = '<input id="total-page" type="hidden" value="8">'
+    assert marker in html
+    with pytest.raises(ParserBroken, match="total-page"):
+        parse_toc_page(html.replace(marker, ""), 1)
+
+
 def test_missing_novel_markers_is_parser_broken():
     with pytest.raises(ParserBroken):
         parse_toc_page(fixture("search_results.html"), 1)
@@ -153,6 +161,10 @@ def test_short_chapter_with_title_is_parser_broken():
         ("Hết chương. Truyện Full truyenfull.live", "Hết chương."),
         ("Hắn thích đọc truyện full ở nhà.\nHết.", "Hắn thích đọc truyện full ở nhà.\nHết."),
         ("Cuối cùng là truyện full", "Cuối cùng là truyện full"),
+        (
+            "Đầu. truyen full, truyenfull ở giữa chương. Cuối.",
+            "Đầu. truyen full, truyenfull ở giữa chương. Cuối.",
+        ),
     ],
 )
 def test_seo_tail_is_end_anchored_and_needs_two_keywords(raw, expected):
@@ -172,6 +184,38 @@ def test_search_results():
 def test_search_first_page_and_empty_results():
     assert len(parse_search_page(fixture("search_paged.html"))) == 27
     assert parse_search_page(fixture("search_empty.html")) == []
+
+
+def test_search_page_without_rows_or_empty_marker_is_parser_broken():
+    html = '<html><body><div id="list-page"><p>Trang đã đổi giao diện</p></div></body></html>'
+    with pytest.raises(ParserBroken, match="search page"):
+        parse_search_page(html)
+
+
+@pytest.mark.parametrize(
+    "link",
+    [
+        '<a href="">Tiên Nghịch</a>',
+        '<a href="https://example.com/tien-nghich/">Tiên Nghịch</a>',
+        '<a href="https://truyenfull.live/tien-nghich/"></a>',
+    ],
+)
+def test_search_row_with_bad_link_is_parser_broken(link):
+    html = (
+        '<div id="list-page"><div class="row" itemtype="https://schema.org/Book">'
+        f'<h3 class="truyen-title">{link}</h3></div></div>'
+    )
+    with pytest.raises(ParserBroken, match="search page"):
+        parse_search_page(html)
+
+
+def test_search_row_without_title_link_is_parser_broken():
+    html = (
+        '<div id="list-page"><div class="row" itemtype="https://schema.org/Book">'
+        '<span class="author">Trần Mộc</span></div></div>'
+    )
+    with pytest.raises(ParserBroken, match="search page"):
+        parse_search_page(html)
 
 
 def test_parser_budget():
