@@ -26,13 +26,17 @@ wheels = [
 
 [[package]]
 name = "audiotruyen-worker"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "boto3" },
+    { name = "httpx" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "realtime" },
+    { name = "selectolax" },
     { name = "supabase" },
+    { name = "vietnormalizer" },
 ]
 
 [package.dev-dependencies]
@@ -45,9 +49,13 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "boto3", specifier = ">=1.35" },
+    { name = "httpx", specifier = ">=0.28" },
     { name = "pydantic", specifier = ">=2.9" },
     { name = "pydantic-settings", specifier = ">=2.6" },
+    { name = "realtime", specifier = ">=2.32" },
+    { name = "selectolax", specifier = ">=1.0.1" },
     { name = "supabase", specifier = ">=2.10" },
+    { name = "vietnormalizer", specifier = "==0.2.3" },
 ]
 
 [package.metadata.requires-dev]
@@ -701,6 +709,23 @@ wheels = [
 ]
 
 [[package]]
+name = "selectolax"
+version = "1.0.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e8/3f/2cb0e99c64bea089a2b89c2361ce37e0d8ae6c9e58e12ac954b385e154d9/selectolax-1.0.1.tar.gz", hash = "sha256:ee75a63d06fa8a821c802eb34c57be62017fdd058b48636e2f75dd3315438adf", size = 3620566, upload-time = "2026-10-17T18:15:00.27Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b6/e3/c7bcf8f4509e06f1dd7d7d202fe417f739379b05c125dddbc0ac893f7547/selectolax-1.0.1-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:be3728355b9ef82a0956ad2844228ffa5cc34a79edd277df94f5a1f2c58429b0", size = 1426743, upload-time = "2026-10-17T18:13:29.664Z" },
+    { url = "https://files.pythonhosted.org/packages/4c/89/cb67649024bd9dc3723f8ed0b8e5e00efc06155906c784ee66443153c98a/selectolax-1.0.1-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:d6d74f2a9aaf822f3da15a86a635314fb20bdda2feff4427e5145eaac818b20e", size = 1419844, upload-time = "2026-10-17T18:13:30.983Z" },
+    { url = "https://files.pythonhosted.org/packages/3b/74/4adce513febefb6489f7394dd2e3e94e73754ccc6f4f5d0f95fb03aa1206/selectolax-1.0.1-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:bbf0a04d2a34afdf2abc0d8a7c65240cb96019f41c41d829a151a0fc633a6eeb", size = 1537274, upload-time = "2026-10-17T18:13:32.354Z" },
+    { url = "https://files.pythonhosted.org/packages/f7/05/ead2487e4fdc19f34b3babe73aafd52edb741e1e4d1fd0605fe9f3807846/selectolax-1.0.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:688605ae8480c58be79d5b643a17c6f41f0e5131f0a2f4d1fa1ae234991e38f9", size = 1563464, upload-time = "2026-10-17T18:13:33.76Z" },
+    { url = "https://files.pythonhosted.org/packages/64/53/57ca101a2caefd91a953a9495e038bbfa7cac909160524f2ffbbf210a92d/selectolax-1.0.1-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:f91b88d2e11fba48d5d04efea661da21f2cd32249d62639bf8ba75532b60c68f", size = 1547457, upload-time = "2026-10-17T18:13:35.437Z" },
+    { url = "https://files.pythonhosted.org/packages/af/c7/444aee420d1fa74206340d6d76603223186f2206c512a9c7cf6b190df2c3/selectolax-1.0.1-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:70f96897fcb55863664f57da5f47ab51755b160eb40c316c803c5581eaf065dc", size = 1570396, upload-time = "2026-10-17T18:13:36.84Z" },
+    { url = "https://files.pythonhosted.org/packages/5e/74/f557883c2741d7bfb4143cabd2a07f0917ddf66ca8eac7f345aa3a3ca95a/selectolax-1.0.1-cp312-cp312-win32.whl", hash = "sha256:cfcde5a0ab1a9720c292da4a076f6303e8532ee4c5a6794f77c37244fae69c9b", size = 1213086, upload-time = "2026-10-17T18:13:38.599Z" },
+    { url = "https://files.pythonhosted.org/packages/03/12/70baf6dd0c2aec49f21c23f9853bf4a2c4f5956a7894b5d0f0087dd4dee8/selectolax-1.0.1-cp312-cp312-win_amd64.whl", hash = "sha256:5452301dc5f76fb455eef32b4f23300a1a04e5729af822897107033d5c911c64", size = 1279873, upload-time = "2026-10-17T18:13:39.979Z" },
+    { url = "https://files.pythonhosted.org/packages/33/33/8287773bed6c8214e71f63d646feb6bb72d1b12577d0b2d52739eb63c81e/selectolax-1.0.1-cp312-cp312-win_arm64.whl", hash = "sha256:b934588f643c4dda3cf9c1ceb60b56190fc63ef2adf2d94b2b45d964662c258c", size = 1261044, upload-time = "2026-10-17T18:13:41.384Z" },
+]
+
+[[package]]
 name = "six"
 version = "1.17.0"
 source = { registry = "https://pypi.org/simple" }
@@ -807,6 +832,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/e3/05/b17359e1cefb4f909b5e40b1b90a496d987258916dbbf88e842c729f510e/urllib3-2.8.0.tar.gz", hash = "sha256:63bf2ead4c879426ebf22ef2a781eeb4aa3b4ae798a0435506f8687fd5bb9b63", size = 458972, upload-time = "2026-09-15T19:29:36.253Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/92/9d/c4e665119135114480843e7ab388fa94d8480650450e6f8e26b70d323a4c/urllib3-2.8.0-py3-none-any.whl", hash = "sha256:0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3", size = 135717, upload-time = "2026-09-15T19:29:34.577Z" },
+]
+
+[[package]]
+name = "vietnormalizer"
+version = "0.2.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d3/61/b11a8035eada9b328fd6536b0da7b41dfe66ff0e8d4998bb1a3b4b955302/vietnormalizer-0.2.3.tar.gz", hash = "sha256:cb5ee9a93f1a1bd064fe2d47292cdba755d4a8e353453e9defadbcdd8ea49999", size = 180235, upload-time = "2026-02-25T21:14:21.571Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cf/34/988fb8af8f3e0520f279f1ecda36a20b347367921c27ae1dc7d57f3067f1/vietnormalizer-0.2.3-py3-none-any.whl", hash = "sha256:0ccddbccb52c26e5b06f164f737b07feb1d7833432128dd093119fd59c7ce557", size = 178783, upload-time = "2026-02-25T21:14:19.696Z" },
 ]
 
 [[package]]
