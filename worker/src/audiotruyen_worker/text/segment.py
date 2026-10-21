@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from itertools import pairwise
 from typing import Literal
 
 MAX_CHARS = 250
@@ -43,12 +44,12 @@ def _paragraphs(text: str) -> list[tuple[int, int]]:
 def _dialogue_spans(text: str, start: int, end: int) -> list[tuple[int, int, Kind]]:
     """Split one paragraph into (start, end, kind) pieces covering it in order."""
     if text[start] in _DASHES:
-        # Dash-led dialogue: "- Lời thoại - hắn nói." The speech runs to the next spaced dash.
+        # Dash-led dialogue: "- Lời thoại - hắn nói - lời tiếp." Every spaced dash switches
+        # between speech and attribution, starting with speech.
         sep = re.compile(r"\s[" + _DASHES + r"]\s")
-        match = sep.search(text, start + 1, end)
-        if match is None:
-            return [(start, end, "dialogue")]
-        return [(start, match.start(), "dialogue"), (match.start(), end, "narration")]
+        cuts = [start] + [m.start() for m in sep.finditer(text, start + 1, end)] + [end]
+        kinds: tuple[Kind, Kind] = ("dialogue", "narration")
+        return [(a, b, kinds[n % 2]) for n, (a, b) in enumerate(pairwise(cuts))]
 
     pieces: list[tuple[int, int, Kind]] = []
     pos = cursor = start

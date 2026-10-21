@@ -50,6 +50,17 @@ def test_dash_led_dialogue():
     ]
 
 
+def test_dash_led_line_alternates_dialogue_and_narration_at_every_spaced_dash():
+    text = "- Ngươi - Lâm Phong quát - cút ngay!"
+    segs = segment_text(text)
+    assert [(s.kind, s.text) for s in segs] == [
+        ("dialogue", "- Ngươi"),
+        ("narration", "- Lâm Phong quát"),
+        ("dialogue", "- cút ngay!"),
+    ]
+    assert all(text[s.start : s.end] == s.text for s in segs)
+
+
 def test_long_paragraph_is_split_at_sentence_ends():
     sentence = "Hắn đi qua cánh rừng già rậm rạp, nghe tiếng gió thổi qua những tán lá cao vút. "
     text = (sentence * 8).strip()
