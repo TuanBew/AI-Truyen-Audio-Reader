@@ -55,7 +55,7 @@ Web, from `web/`:
 
 ## Database rules
 
-- Migrations in `supabase/migrations/` that are already applied to cloud (currently `20261015000100`, `20261015000200`, `20261015000300`) are never edited. Changes go in new timestamped files.
+- Migrations in `supabase/migrations/` that are already applied to cloud (currently `20261015000100`, `20261015000200`, `20261015000300`, `20261019000100`, `20261019000200`, `20261019000300`) are never edited. Changes go in new timestamped files.
 - Every new table: `enable row level security` plus explicit policies. Worker-only tables also `revoke insert, update, delete, truncate ... from authenticated`.
 - Every new function: `revoke execute ... from public, anon, authenticated`, then grant only the intended roles. `security definer` functions use `set search_path = ''` and fully qualified names.
 - A `security definer` function runs as `postgres`, which `jobs_guard_write` trusts: never expose one to `authenticated` that writes `jobs`.
