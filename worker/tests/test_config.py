@@ -63,3 +63,25 @@ def test_validation_error_hides_secret_values(env):
     message = str(excinfo.value)
     assert "leak-canary-123" not in message
     assert "leak-canary-456" not in message
+
+
+def test_cost_and_tts_defaults(env):
+    from audiotruyen_worker.config import WORKER_ROOT
+
+    settings = load_settings(_env_file=None)
+    assert settings.r2_uploads_enabled is True
+    assert settings.r2_max_bytes == 8 * 1024**3
+    assert settings.r2_max_puts_per_month == 800_000
+    assert settings.tts_device == "auto"
+    assert settings.models_dir == WORKER_ROOT / "models"
+    assert (WORKER_ROOT / "pyproject.toml").exists()
+
+
+def test_kill_switch_and_device_from_env(env):
+    env.setenv("R2_UPLOADS_ENABLED", "false")
+    env.setenv("TTS_DEVICE", "cpu")
+    settings = load_settings(_env_file=None)
+    assert settings.r2_uploads_enabled is False and settings.tts_device == "cpu"
+    env.setenv("TTS_DEVICE", "tpu")
+    with pytest.raises(ValidationError):
+        load_settings(_env_file=None)

@@ -34,3 +34,21 @@ def test_put_sets_content_type(storage):
     storage.put_bytes("seg.webm", b"\x1a\x45\xdf\xa3", "audio/webm")
     head = storage.client.head_object(Bucket="audiotruyen", Key="seg.webm")
     assert head["ContentType"] == "audio/webm"
+
+
+def test_put_bytes_returns_size_and_sets_cache_control(storage):
+    assert (
+        storage.put_bytes("a.webm", b"12345", "audio/webm", cache_control="public, max-age=60") == 5
+    )
+    head = storage.client.head_object(Bucket="audiotruyen", Key="a.webm")
+    assert head["CacheControl"] == "public, max-age=60"
+
+
+def test_delete_many_removes_keys_and_ignores_missing(storage):
+    for key in ("k1", "k2"):
+        storage.put_bytes(key, b"1", "text/plain")
+    storage.delete_many(["k1", "k2", "missing"])
+    assert not storage.exists("k1") and not storage.exists("k2")
+    storage.delete_many([])
+    with pytest.raises(ValueError):
+        storage.delete_many([f"k{i}" for i in range(1001)])

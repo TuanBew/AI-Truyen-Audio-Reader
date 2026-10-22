@@ -45,6 +45,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
+      - name: ffmpeg (libopus) for the audio tests
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: uv sync --locked
       - run: uv run ruff check .
       - run: uv run ruff format --check .
@@ -67,6 +69,8 @@ jobs:
             && test -n "$TEST_SUPABASE_ANON_KEY" \
             && test -n "$TEST_SUPABASE_SERVICE_ROLE_KEY"
       - uses: astral-sh/setup-uv@v6
+      - name: ffmpeg (libopus) for the audio tests
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: uv sync --locked
         working-directory: worker
       - name: Worker db tier (fails on any skip)

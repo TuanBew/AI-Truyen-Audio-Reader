@@ -28,8 +28,15 @@ class R2Storage:
         )
         return cls(client, settings.r2_bucket)
 
-    def put_bytes(self, key: str, data: bytes, content_type: str) -> None:
-        self.client.put_object(Bucket=self.bucket, Key=key, Body=data, ContentType=content_type)
+    def put_bytes(
+        self, key: str, data: bytes, content_type: str, cache_control: str | None = None
+    ) -> int:
+        """Upload one object; returns its size in bytes."""
+        extra = {"CacheControl": cache_control} if cache_control else {}
+        self.client.put_object(
+            Bucket=self.bucket, Key=key, Body=data, ContentType=content_type, **extra
+        )
+        return len(data)
 
     def get_bytes(self, key: str) -> bytes:
         return self.client.get_object(Bucket=self.bucket, Key=key)["Body"].read()
@@ -45,3 +52,18 @@ class R2Storage:
 
     def delete(self, key: str) -> None:
         self.client.delete_object(Bucket=self.bucket, Key=key)
+
+    def delete_many(self, keys: list[str]) -> None:
+        """Delete up to 1000 keys in one request; missing keys are not an error."""
+        if not keys:
+            return
+        if len(keys) > 1000:
+            raise ValueError("delete_many takes at most 1000 keys")
+        response = self.client.delete_objects(
+            Bucket=self.bucket,
+            Delete={"Objects": [{"Key": k} for k in keys], "Quiet": True},
+        )
+        errors = response.get("Errors") or []
+        if errors:
+            first = errors[0]
+            raise RuntimeError(f"R2 delete failed for {len(errors)} keys ({first.get('Code')})")

@@ -23,6 +23,7 @@ build/
 
 # Worker runtime
 worker/logs/
+worker/models/
 
 # Node / Next.js
 node_modules/
