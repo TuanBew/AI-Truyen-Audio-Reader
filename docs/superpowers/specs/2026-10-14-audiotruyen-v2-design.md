@@ -249,6 +249,8 @@ M2a (migrations `20261019000100` and `20261019000200`): `20261019000100` replace
 
 `20261019000200` adds a `chapters` trigger that clears `text`, `text_hash` and `fetched_at` when a chapter's `url` changes: TOC indexes are positional, so a chapter inserted mid-list on the site remaps rows, and stored text must not stay attached to a different chapter. M2b's `synthesize` must check that existing audio matches the chapter's current text.
 
+`20261019000300` (M2a review fixes): `requeue_expired_jobs()` requeues an expired lease with the same `2^attempts` minutes backoff as `fail_job` and, on the last attempt, fails the job with a Vietnamese error the owner can act on; `jobs_guard_write` refuses web-app (role `authenticated`) cancel and retry of `cleanup_r2` jobs; `claim_job` and `worker_heartbeat` clamp the lease to at least 30 s (null means 300 s); the url-reset trigger keeps text written in the same update as the new url.
+
 ### 4.1 Segment schema
 
 ```json
@@ -264,6 +266,10 @@ M2a (migrations `20261019000100` and `20261019000200`): `20261019000100` replace
   "start_ms": 81234, "end_ms": 85610
 }
 ```
+
+`chapter_analysis.segments` entries (M2a) carry `i`, `kind`, `src`, `speaker`, `gender`, `emotion`, `intensity`, plus `p` (paragraph number, 0-based) and `pe` (true on the last segment of a paragraph, which gets a longer pause); `voice_id` and `start_ms`/`end_ms` are added only by synthesis (`chapter_audio.segments`).
+
+M3 note: `src` offsets are Python code-point indices. JavaScript strings index UTF-16 code units, so the web must convert them before slicing text that contains astral characters (emoji).
 
 ### 4.2 voice_hash
 
@@ -290,7 +296,7 @@ voices/{voice_id}/{emotion}.wav
 
 - On start: register in `worker_status`, check the configured OpenRouter models and the key (`GET /api/v1/key`, `GET /api/v1/models`), load VieNeu lazily on first `synthesize`.
 - Wake sources: Supabase Realtime subscription on `jobs` inserts + 30 s polling fallback.
-- Heartbeat every 15 s from its own thread: one `worker_heartbeat` RPC updates `worker_status`, extends `lease_until` of the current job and calls `requeue_expired_jobs()`. If it reports the lease as lost, the running handler is stopped at its next checkpoint and writes nothing. Ctrl+C hands the running job back to the queue (retryable) instead of waiting for the lease to expire.
+- Heartbeat every 15 s from its own thread: one `worker_heartbeat` RPC updates `worker_status`, extends `lease_until` of the current job and calls `requeue_expired_jobs()`. If it reports the lease as lost, the running handler is stopped at its next checkpoint and writes nothing. Ctrl+C hands the running job back to the queue (retryable) instead of waiting for the lease to expire. The hand-back counts as an attempt: the job gets the normal backoff, and on its last attempt it fails instead.
 - The worker claims only job types it has handlers for (M2a: `search`, `fetch_novel`, `fetch_chapter`; M2b adds `synthesize` and `cleanup_r2`).
 - One job at a time. Lease 5 min, extended by heartbeat.
 - Failure: `attempts < max_attempts` → `queued` with `run_after = now() + 2^attempts min`; else `failed` with a human-readable `error`.
@@ -312,7 +318,7 @@ class SourceAdapter(Protocol):
 
 Truyenfull adapter:
 - `httpx` with a desktop browser User-Agent; request starts spaced 0.7 s + 0.3-0.8 s jitter (1.0-1.5 s); timeouts, transport errors, 429 and 5xx retried 3 times with 2/4/8 s backoff (`Retry-After` honoured up to 60 s); redirects followed only within truyenfull hosts.
-- TOC: `toc_pages` yields one page at a time; `fetch_novel` stores each page (upsert on `(novel_id, index)`, never delete) before requesting the next, so the first 50 chapters are readable within about a second while a long TOC (41 pages for 2,000 chapters, about 50 s) keeps loading. `check_updates` (M5) starts at the page holding the last known chapter. Indexes are positional: a changed `url` at an existing index drops that row's stored text (migration `20261019000200`, section 4).
+- TOC: `toc_pages` yields one page at a time; `fetch_novel` stores each page (upsert on `(novel_id, index)`, never delete) before requesting the next, so the first 50 chapters are readable within about a second while a long TOC (40 pages for 2,000 chapters, about 50 s) keeps loading. `check_updates` (M5) starts at the page holding the last known chapter. Indexes are positional: a changed `url` at an existing index drops that row's stored text (migration `20261019000200`, section 4).
 - Chapter: parse `#chapter-c`, drop descendant elements whose `id` or any class **starts with** `ads` (prefix match, e.g. `#ads-chapter-top`; never a substring match, which would also hit words like `roads`), convert `<br>` to line breaks, strip the trailing SEO keyword block with a pattern **anchored to the end of the text** (a match in the middle of the chapter is never removed). Carried to M2 from the M0 review.
 - Validation: raise `ParserBroken` if text is empty or under 500 chars for a chapter whose title is present; raise `SourceBlocked` on Cloudflare challenge markers or HTTP 403/503 with challenge body. `ParserBroken` also when a TOC page before the last one does not hold exactly 50 chapters (protects chapter indexes); `NovelNotFound` on a redirect to the search page or a 404.
 

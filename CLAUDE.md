@@ -33,7 +33,7 @@ Worker, from `worker/`:
     uv run worker run --once      # drain the queue once and exit
     uv run worker enqueue fetch-novel https://truyenfull.live/<slug>/   # test without the web app
 
-`worker/.env` points at the production Supabase project. To run the worker against local Supabase, override it in the shell (environment variables win over `.env`): `set -a; source <(bash scripts/supabase-test-env.sh); set +a; export SUPABASE_URL=$TEST_SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY=$TEST_SUPABASE_SERVICE_ROLE_KEY WORKER_ID=local-dev`. In a worktree without `worker/.env`, also export dummy `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` (the worker reads R2 settings at startup; nothing uploads before M2b).
+`worker/.env` points at the production Supabase project. To run the worker against local Supabase, override it in the shell (environment variables win over `.env`): from the repo root run `set -a; source <(bash scripts/supabase-test-env.sh); set +a; export SUPABASE_URL=$TEST_SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY=$TEST_SUPABASE_SERVICE_ROLE_KEY WORKER_ID=local-dev`, then `cd worker`. In a worktree without `worker/.env`, also export dummy `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` (the worker reads R2 settings at startup; nothing uploads before M2b).
 
 Load local Supabase test env for `db` tests (Git Bash, repo root):
 
@@ -58,6 +58,7 @@ Web, from `web/`:
 - Migrations in `supabase/migrations/` that are already applied to cloud (currently `20261015000100`, `20261015000200`, `20261015000300`) are never edited. Changes go in new timestamped files.
 - Every new table: `enable row level security` plus explicit policies. Worker-only tables also `revoke insert, update, delete, truncate ... from authenticated`.
 - Every new function: `revoke execute ... from public, anon, authenticated`, then grant only the intended roles. `security definer` functions use `set search_path = ''` and fully qualified names.
+- A `security definer` function runs as `postgres`, which `jobs_guard_write` trusts: never expose one to `authenticated` that writes `jobs`.
 - Tests: add pgTAP coverage in `supabase/tests/` for every new table and function.
 
 ## Applying migrations to cloud
