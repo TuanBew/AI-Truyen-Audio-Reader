@@ -113,3 +113,62 @@ def test_cli_dispatches_run_and_enqueue(monkeypatch):
 
 def test_log_dir_is_worker_logs():
     assert (cli.LOG_DIR.parent.name, cli.LOG_DIR.name) == ("worker", "logs")
+
+
+def _patch_enqueue(monkeypatch, *, resolve=None, enqueue=None):
+    from audiotruyen_worker import admin, db
+
+    calls = []
+    monkeypatch.setattr(cli, "load_settings", lambda: calls.append("settings") or object())
+    monkeypatch.setattr(db, "make_client", lambda settings: calls.append("client") or object())
+    monkeypatch.setattr(admin, "resolve_owner_id", resolve or (lambda client, email: "u1"))
+    monkeypatch.setattr(
+        admin, "enqueue_job", enqueue or (lambda client, user_id, kind, value, priority: "job-1")
+    )
+    return calls
+
+
+def _raiser(exc):
+    def raise_(*args):
+        raise exc
+
+    return raise_
+
+
+def test_enqueue_reports_success(monkeypatch, capsys):
+    _patch_enqueue(monkeypatch)
+    assert cli.main(["enqueue", "search", "đấu phá"]) == 0
+    assert "job-1" in capsys.readouterr().out
+
+
+def test_enqueue_without_a_single_account_asks_for_email(monkeypatch, capsys):
+    _patch_enqueue(monkeypatch, resolve=_raiser(LookupError("expected exactly one account")))
+    assert cli.main(["enqueue", "search", "đấu phá"]) == 1
+    err = capsys.readouterr().err
+    assert "Không tìm thấy tài khoản. Dùng --email để chọn tài khoản." in err
+    assert "expected exactly one" not in err
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        ValueError("cannot enqueue job type 'zzleak'"),
+        __import__("postgrest.exceptions", fromlist=["APIError"]).APIError(
+            {"message": "jobs: queue limit zzleak", "code": "54000"}
+        ),
+    ],
+)
+def test_enqueue_rejected_job_prints_vietnamese_without_raw_text(monkeypatch, capsys, exc):
+    _patch_enqueue(monkeypatch, enqueue=_raiser(exc))
+    assert cli.main(["enqueue", "fetch-chapter", "c1"]) == 1
+    err = capsys.readouterr().err
+    assert "Không thêm được job: dữ liệu không hợp lệ." in err
+    assert "zzleak" not in err
+
+
+@pytest.mark.parametrize("value", ["", "   "])
+def test_enqueue_rejects_a_blank_value_before_any_network_call(monkeypatch, capsys, value):
+    calls = _patch_enqueue(monkeypatch)
+    assert cli.main(["enqueue", "search", value]) == 1
+    assert "Giá trị không được để trống." in capsys.readouterr().err
+    assert calls == []

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -15,7 +16,7 @@ from audiotruyen_worker.sources.base import NovelNotFound, ParserBroken, SourceB
 log = logging.getLogger(__name__)
 
 
-SHUTDOWN_MESSAGE = "Worker đã dừng giữa chừng; job sẽ được chạy lại."
+SHUTDOWN_MESSAGE = "Worker đã dừng giữa chừng."
 
 
 class JobCancelled(Exception):
@@ -166,10 +167,21 @@ class Runner:
             except Exception:  # network blip talking to Supabase: back off, keep the loop alive
                 log.exception("job loop error")
                 ran = False
-                stop.wait(5)
+                _wait_any(5.0, stop)
             if not ran:
-                self.wake.wait(self.poll_seconds)
+                _wait_any(self.poll_seconds, self.wake, stop)
                 self.wake.clear()
+
+
+def _wait_any(seconds: float, *events: threading.Event) -> None:
+    """Wait until one of the events is set or the timeout passes, in slices of at most 1 s:
+    on Windows a long Event.wait cannot be interrupted by Ctrl+C."""
+    deadline = time.monotonic() + seconds
+    while not any(event.is_set() for event in events):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        events[0].wait(min(remaining, 1.0))
 
 
 class Heartbeat(threading.Thread):

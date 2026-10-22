@@ -1,4 +1,5 @@
 import threading
+import time
 
 import pytest
 
@@ -115,6 +116,7 @@ def test_keyboard_interrupt_hands_the_job_back():
     with pytest.raises(KeyboardInterrupt):
         Runner(queue, {"search": interrupted}, version="v", device="cpu").run_once()
     assert queue.failed == [("j1", SHUTDOWN_MESSAGE, True)]
+    assert SHUTDOWN_MESSAGE == "Worker đã dừng giữa chừng."
 
 
 def test_heartbeat_without_job_reports_none():
@@ -176,3 +178,47 @@ def test_keyboard_interrupt_survives_a_failed_hand_back():
 
     with pytest.raises(KeyboardInterrupt):
         Runner(BrokenQueue([job()]), {"search": interrupted}, version="v", device="cpu").run_once()
+
+
+def test_run_forever_stops_promptly_while_idle():
+    # Event.wait with a long timeout is not interruptible by Ctrl+C on Windows; the idle wait
+    # must run in short slices so a stop (or Ctrl+C) is seen within about a second.
+    queue = FakeQueue()
+    runner = Runner(
+        queue, {"search": lambda j, c: None}, version="v", device="cpu", poll_seconds=30.0
+    )
+    stop = threading.Event()
+    loop = threading.Thread(target=runner.run_forever, args=(stop,), daemon=True)
+    loop.start()
+    deadline = time.monotonic() + 5
+    while not queue.claimed_types and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert queue.claimed_types
+    time.sleep(0.2)
+    stop.set()
+    loop.join(1.5)
+    assert not loop.is_alive()
+
+
+def test_run_forever_wakes_early_and_clears_the_wake():
+    queue = FakeQueue()
+    runner = Runner(
+        queue, {"search": lambda j, c: None}, version="v", device="cpu", poll_seconds=30.0
+    )
+    stop = threading.Event()
+    loop = threading.Thread(target=runner.run_forever, args=(stop,), daemon=True)
+    loop.start()
+    deadline = time.monotonic() + 5
+    while not queue.claimed_types and time.monotonic() < deadline:
+        time.sleep(0.01)
+    runner.wake.set()
+    deadline = time.monotonic() + 1.5
+    while len(queue.claimed_types) < 2 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert len(queue.claimed_types) == 2
+    time.sleep(0.2)
+    assert len(queue.claimed_types) == 2  # the wake was cleared, so the loop is idle again
+    assert not runner.wake.is_set()
+    stop.set()
+    loop.join(1.5)
+    assert not loop.is_alive()

@@ -78,13 +78,28 @@ def _run(once: bool) -> int:
 
 
 def _enqueue(kind: str, value: str, email: str | None, priority: int) -> int:
+    from postgrest.exceptions import APIError
+
     from audiotruyen_worker.admin import enqueue_job, resolve_owner_id
     from audiotruyen_worker.db import make_client
 
+    if not value.strip():
+        print("Giá trị không được để trống.", file=sys.stderr)
+        return 1
+    # Outside the try: a settings error (pydantic's ValidationError is a ValueError) is not
+    # bad job data.
     client = make_client(load_settings())
-    job_id = enqueue_job(
-        client, resolve_owner_id(client, email), kind.replace("-", "_"), value, priority
-    )
+    # Messages only: raw exception text can carry database details, never print it here.
+    try:
+        job_id = enqueue_job(
+            client, resolve_owner_id(client, email), kind.replace("-", "_"), value, priority
+        )
+    except LookupError:
+        print("Không tìm thấy tài khoản. Dùng --email để chọn tài khoản.", file=sys.stderr)
+        return 1
+    except (ValueError, APIError):
+        print("Không thêm được job: dữ liệu không hợp lệ.", file=sys.stderr)
+        return 1
     print(f"Đã thêm job {kind} ({job_id}).")
     return 0
 
