@@ -1,7 +1,7 @@
 -- Allow-lists for table RLS and function privileges (spec 7.3.1). Extension-owned objects
 -- (pgTAP itself) are excluded.
 begin;
-select plan(7);
+select plan(9);
 
 select is_empty(
   $$select c.relname::text from pg_class c join pg_namespace n on n.oid = c.relnamespace
@@ -14,9 +14,18 @@ select is_empty(
       from pg_proc p join pg_namespace n on n.oid = p.pronamespace
      where n.nspname = 'public'
        and not exists (select 1 from pg_depend d where d.objid = p.oid and d.deptype = 'e')
-       and (has_function_privilege('anon', p.oid, 'execute')
-            or has_function_privilege('authenticated', p.oid, 'execute'))$$,
-  'no public function is executable by anon or authenticated'
+       and has_function_privilege('anon', p.oid, 'execute')$$,
+  'no public function is executable by anon'
+);
+
+select set_eq(
+  $$select p.oid::regprocedure::text
+      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public'
+       and not exists (select 1 from pg_depend d where d.objid = p.oid and d.deptype = 'e')
+       and has_function_privilege('authenticated', p.oid, 'execute')$$,
+  array['current_voice_hash(uuid)'],
+  'authenticated executes exactly the web allow-list'
 );
 
 select set_eq(
@@ -32,7 +41,13 @@ select set_eq(
     'begin_chapter_audio(uuid,text)',
     'worker_heartbeat(text,text,text,uuid,integer)',
     'finish_job(uuid,text,text,jsonb,text)',
-    'fail_job(uuid,text,text,boolean)'
+    'fail_job(uuid,text,text,boolean)',
+    'r2_reserve_upload(text,bigint,bigint,bigint)',
+    'r2_mark_deleted(text[])',
+    'r2_usage()',
+    'r2_live_keys(text,text,integer)',
+    'r2_gc_candidates(interval,integer)',
+    'current_voice_hash(uuid)'
   ],
   'service_role executes exactly the worker allow-list'
 );
@@ -55,6 +70,13 @@ select is_empty(
 );
 
 select ok(not has_table_privilege('authenticated', 'public.jobs', 'delete'), 'authenticated cannot delete jobs');
+
+select is_empty(
+  $$select t || ':' || priv from unnest(array['public.r2_objects', 'public.r2_monthly_puts']) as t,
+         unnest(array['select', 'insert', 'update', 'delete']) as priv
+     where has_table_privilege('authenticated', t, priv)$$,
+  'authenticated has no access to the R2 ledger tables'
+);
 
 select ok(
   not exists (
