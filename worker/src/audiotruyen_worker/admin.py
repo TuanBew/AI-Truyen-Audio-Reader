@@ -35,3 +35,25 @@ def set_password(client, email: str, password: str) -> str:
     user_id = _find_user_id(client, email)
     client.auth.admin.update_user_by_id(user_id, {"password": password})
     return user_id
+
+
+def resolve_owner_id(client, email: str | None) -> str:
+    """The owner's user id: by email, or the only account when email is None (single-user app)."""
+    if email:
+        return _find_user_id(client, email)
+    users = client.auth.admin.list_users(page=1, per_page=2)
+    if len(users) != 1:
+        raise LookupError("expected exactly one account; pass --email")
+    return users[0].id
+
+
+ENQUEUE_PAYLOAD_KEYS = {"search": "query", "fetch_novel": "url", "fetch_chapter": "chapter_id"}
+
+
+def enqueue_job(client, user_id: str, job_type: str, value: str, priority: int = 0) -> str:
+    """Insert a job as the worker would (service role) and return its id."""
+    key = ENQUEUE_PAYLOAD_KEYS.get(job_type)
+    if key is None:
+        raise ValueError(f"cannot enqueue job type {job_type!r}")
+    row = {"user_id": user_id, "type": job_type, "payload": {key: value}, "priority": priority}
+    return client.table("jobs").insert(row).execute().data[0]["id"]

@@ -1,13 +1,17 @@
 [project]
 name = "audiotruyen-worker"
-version = "0.1.0"
+version = "0.2.0"
 description = "AudioTruyen v2 worker: scraping, analysis, TTS and uploads"
 requires-python = ">=3.12,<3.13"
 dependencies = [
   "boto3>=1.35",
+  "httpx>=0.28",
   "pydantic>=2.9",
   "pydantic-settings>=2.6",
+  "realtime>=2.32",
+  "selectolax>=1.0.1",
   "supabase>=2.10",
+  "vietnormalizer==0.2.3",
 ]
 
 [project.scripts]

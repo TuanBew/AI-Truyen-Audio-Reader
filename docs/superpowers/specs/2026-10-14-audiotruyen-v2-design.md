@@ -56,6 +56,12 @@ Verified on 2026-10-13 against `truyenfull.live`:
 - Text contains obfuscated words such as `c.h.ử.i` that must be normalized.
 - Novel pages expose `<input id="truyen-id" value="...">`; chapter URLs follow `/{slug}/chuong-{n}/`.
 - The page embeds Cloudflare Turnstile. Residential IP requests return 200; datacenter IPs (Vercel) may be challenged. **All scraping runs in the worker.**
+- Re-verified 2026-10-19 while planning M2a (fixtures in `worker/tests/fixtures/truyenfull/`):
+  - Current novels wrap the chapter in one `<p>` with `<br><br>` between paragraphs; older novels put text nodes directly in `#chapter-c`. Both end with two hidden `<p style="display: none">` SEO paragraphs, which the parser drops as hidden elements; the end-anchored keyword strip stays as a fallback.
+  - The table of contents has 50 chapters per page at `/{slug}/trang-{n}/`; the page count is `<input id="total-page">` and the slug `<input id="truyen-ascii">`. Chapter URLs are not always `chuong-{n}` (e.g. `chuong-1-1`), so `chapters.index` is the TOC position.
+  - A removed novel answers `301` to `/tim-kiem/?tukhoa=...` (reported as "not found"). Search is `/tim-kiem/?tukhoa=` with about 27 results per page.
+  - Novels whose slug ends in `-free` (`...-zhihu-free`, `...-truyenfull-ai-free`) answer every non-browser request with a Cloudflare managed challenge (`403`, `cf-mitigated: challenge`, `<title>Just a moment...</title>`), even from the residential IP. The worker never tries to solve challenges, so these novels fail with `SourceBlocked` (known limitation). Normal pages embed a Turnstile comment widget (`cf-turnstile`), which is not a challenge.
+  - Besides dotted obfuscation, some chapters censor words with asterisks (`g**t ch*t`).
 
 Personal-use note: reading the HTML skips the site's ad monetization. This is acceptable only because the app is private and single-user.
 
@@ -239,6 +245,12 @@ settings (user_id pk, data jsonb, updated_at)  -- see 7.1 / 6.4
 
 `claim_job(worker_id text, lease_seconds int)` is a SQL function: selects the first `queued` job with `run_after <= now()` ordered by `priority, created_at`, `FOR UPDATE SKIP LOCKED`, sets `running`, `lease_until`, `worker_id`, increments `attempts`, returns it. A companion `requeue_expired_jobs()` resets `running` jobs whose `lease_until < now()`. `begin_chapter_audio(chapter_id uuid, voice_hash text)` creates or re-attempts a `chapter_audio` row and returns `(id, attempt, status)` (5.1). Only the service role may execute these three functions.
 
+M2a (migrations `20261019000100` and `20261019000200`): `20261019000100` replaces it with `claim_job(worker_id, lease_seconds, types text[] default null)` so a worker claims only job types it can run, and adds `worker_heartbeat(worker_id, version, device, job_id, lease_seconds)` (requeues expired leases, extends the current lease, upserts `worker_status`; returns false when the lease was lost), `finish_job(...)` (done/cancelled) and `fail_job(...)` (retry with `2^attempts` minutes backoff or fail). Every worker write is fenced by job id + worker id + `status = 'running'`. All are service-role only.
+
+`20261019000200` adds a `chapters` trigger that clears `text`, `text_hash` and `fetched_at` when a chapter's `url` changes: TOC indexes are positional, so a chapter inserted mid-list on the site remaps rows, and stored text must not stay attached to a different chapter. M2b's `synthesize` must check that existing audio matches the chapter's current text.
+
+`20261019000300` (M2a review fixes): `requeue_expired_jobs()` requeues an expired lease with the same `2^attempts` minutes backoff as `fail_job` and, on the last attempt, fails the job with a Vietnamese error the owner can act on; `jobs_guard_write` refuses web-app (role `authenticated`) cancel and retry of `cleanup_r2` jobs; `claim_job` and `worker_heartbeat` clamp the lease to at least 30 s (null means 300 s); the url-reset trigger keeps text written in the same update as the new url.
+
 ### 4.1 Segment schema
 
 ```json
@@ -254,6 +266,10 @@ settings (user_id pk, data jsonb, updated_at)  -- see 7.1 / 6.4
   "start_ms": 81234, "end_ms": 85610
 }
 ```
+
+`chapter_analysis.segments` entries (M2a) carry `i`, `kind`, `src`, `speaker`, `gender`, `emotion`, `intensity`, plus `p` (paragraph number, 0-based) and `pe` (true on the last segment of a paragraph, which gets a longer pause); `voice_id` and `start_ms`/`end_ms` are added only by synthesis (`chapter_audio.segments`).
+
+M3 note: `src` offsets are Python code-point indices. JavaScript strings index UTF-16 code units, so the web must convert them before slicing text that contains astral characters (emoji).
 
 ### 4.2 voice_hash
 
@@ -280,7 +296,8 @@ voices/{voice_id}/{emotion}.wav
 
 - On start: register in `worker_status`, check the configured OpenRouter models and the key (`GET /api/v1/key`, `GET /api/v1/models`), load VieNeu lazily on first `synthesize`.
 - Wake sources: Supabase Realtime subscription on `jobs` inserts + 30 s polling fallback.
-- Heartbeat every 15 s: updates `worker_status`, extends `lease_until` of the current job, calls `requeue_expired_jobs()`.
+- Heartbeat every 15 s from its own thread: one `worker_heartbeat` RPC updates `worker_status`, extends `lease_until` of the current job and calls `requeue_expired_jobs()`. If it reports the lease as lost, the running handler is stopped at its next checkpoint and writes nothing. Ctrl+C hands the running job back to the queue (retryable) instead of waiting for the lease to expire. The hand-back counts as an attempt: the job gets the normal backoff, and on its last attempt it fails instead.
+- The worker claims only job types it has handlers for (M2a: `search`, `fetch_novel`, `fetch_chapter`; M2b adds `synthesize` and `cleanup_r2`).
 - One job at a time. Lease 5 min, extended by heartbeat.
 - Failure: `attempts < max_attempts` → `queued` with `run_after = now() + 2^attempts min`; else `failed` with a human-readable `error`.
 - `synthesize` jobs whose `voice_hash` no longer matches the current settings are marked `cancelled` without work.
@@ -295,21 +312,25 @@ class SourceAdapter(Protocol):
     id: str                                   # 'truyenfull'
     def matches(self, url: str) -> bool: ...
     def search(self, query: str) -> list[NovelSummary]: ...
-    def novel(self, url: str) -> NovelDetail: ...          # metadata + full TOC
+    def toc_pages(self, url: str, start_page: int = 1) -> Iterator[TocPage]: ...  # one TOC page at a time
     def chapter(self, url: str) -> ChapterContent: ...
 ```
 
 Truyenfull adapter:
-- `httpx` with a desktop browser User-Agent, ~1 req/s with 0.3-0.8 s jitter, retries with backoff on 5xx/timeouts.
-- TOC: paginate the novel's chapter list until exhausted; implementation must inspect the live pagination (page links or AJAX) and record fixtures.
+- `httpx` with a desktop browser User-Agent; request starts spaced 0.7 s + 0.3-0.8 s jitter (1.0-1.5 s); timeouts, transport errors, 429 and 5xx retried 3 times with 2/4/8 s backoff (`Retry-After` honoured up to 60 s); redirects followed only within truyenfull hosts.
+- TOC: `toc_pages` yields one page at a time; `fetch_novel` stores each page (upsert on `(novel_id, index)`, never delete) before requesting the next, so the first 50 chapters are readable within about a second while a long TOC (40 pages for 2,000 chapters, about 50 s) keeps loading. `check_updates` (M5) starts at the page holding the last known chapter. Indexes are positional: a changed `url` at an existing index drops that row's stored text (migration `20261019000200`, section 4).
 - Chapter: parse `#chapter-c`, drop descendant elements whose `id` or any class **starts with** `ads` (prefix match, e.g. `#ads-chapter-top`; never a substring match, which would also hit words like `roads`), convert `<br>` to line breaks, strip the trailing SEO keyword block with a pattern **anchored to the end of the text** (a match in the middle of the chapter is never removed). Carried to M2 from the M0 review.
-- Validation: raise `ParserBroken` if text is empty or under 500 chars for a chapter whose title is present; raise `SourceBlocked` on Cloudflare challenge markers or HTTP 403/503 with challenge body.
+- Validation: raise `ParserBroken` if text is empty or under 500 chars for a chapter whose title is present; raise `SourceBlocked` on Cloudflare challenge markers or HTTP 403/503 with challenge body. `ParserBroken` also when a TOC page before the last one does not hold exactly 50 chapters (protects chapter indexes); `NovelNotFound` on a redirect to the search page or a 404.
 
 ### 5.3 Text pipeline
 
-1. **Normalize** (TTS input only; display text stays original): Unicode NFC; de-obfuscate dotted words (`c.h.ử.i` → `chửi`, regex for single Vietnamese letters separated by dots); numbers, dates, units, abbreviations via VietNormalizer; then lexicon rules (global by `position`, then novel-level). Each transformation keeps an offset map back to original text.
-2. **Segment**: split paragraphs; within paragraphs separate dialogue (`"..."`, `“...”`, lines starting with `-`/`–`) from narration; split segments over ~250 chars at sentence boundaries. Each segment records its `src` range in original text.
-3. **Analyze** (speaker, gender, emotion, intensity) via strategy chain (5.4). Cached in `chapter_analysis`.
+Order as implemented (M2a): segments are cut from the ORIGINAL text first, so `src` ranges are exact by construction, and each segment's text is normalized for TTS afterwards; this replaces the offset map. Normalization: NFC → de-obfuscate dotted words → restore known asterisk-censored words (unknown ones are dropped, never read as noise) → lexicon rules (before VietNormalizer, so patterns match the displayed text) → `vietnormalizer` 0.2.3 with its non-Vietnamese-word dictionary, acronym dictionary and transliteration disabled (they rewrite Vietnamese words: `nghe` → `nghê`, `long` → `lon`, `kia` → `ki-a`).
+
+A word counts as asterisk-censored only when an asterisk run has letters on both sides inside the word (`g**t`, `đ**m`); only such words are dropped when unknown. Other words touching asterisks (`*Bốp*`, `Thiên*`) keep their letters and lose only the asterisks. With the acronym dictionary off, `vietnormalizer` still spells out capital-letter runs (`TP.HCM`, `OK`); lexicon rules are the way to override them.
+
+1. **Normalize** (TTS input only, applied per segment after step 2; display text stays original): Unicode NFC → de-obfuscate dotted words (`c.h.ử.i` → `chửi`, regex for single Vietnamese letters separated by dots) → restore or drop asterisk-censored words → lexicon rules (global by `position`, then novel-level) → VietNormalizer (numbers, dates, units).
+2. **Segment**: split paragraphs; within paragraphs separate dialogue (`"..."`, `“...”`, lines starting with `-`/`–`) from narration; split segments over ~250 chars at sentence boundaries. Dash-led lines alternate dialogue and narration at every spaced dash (`- lời thoại - lời dẫn - lời thoại`). Each segment records its `src` range in original text.
+3. **Analyze** (speaker, gender, emotion, intensity) via strategy chain (5.4). Cached in `chapter_analysis`. Before running the chain the worker looks up `chapter_analysis` for each strategy in chain order (current `text_hash` and strategy version) and reuses the first hit, so a cached result costs no LLM quota. M4 needs an explicit re-analyze path to upgrade a cached heuristic result.
 4. **Resolve voice**: narration → narrator voice; dialogue → character's voice, else default by gender, else default narrator-alt. Then, if the voice has an **enabled** ref for the segment's emotion (5.10), clone from that clip (`infer(ref_audio=...)`); otherwise, including every `neutral` segment, speak with the preset voice itself (`infer(voice=preset_name)`, no clone). Only `kind='clone'` voices use a `neutral` ref clip.
 
 ### 5.4 Speaker/emotion strategies
@@ -324,7 +345,7 @@ Chain order configurable in settings (default: `openrouter → local_llm → heu
 
 - **openrouter**: one request per chapter (OpenAI-compatible `POST https://openrouter.ai/api/v1/chat/completions`). Input: numbered segments + compact roster. Output: compact JSON array `[[i, speaker, gender, emotion, intensity]]` plus `new_characters`. No non-verbal tags (dropped after spike S1). Uses `response_format` with a JSON schema (`structured_outputs`), `temperature` 0.2, a bounded `max_tokens`, and reasoning disabled or excluded so the answer fits the schema.
 - **local_llm**: llama.cpp (via `llama-cpp-python`) on CPU, Qwen-class 1.5-3B instruct GGUF Q4, same prompt and schema, processed in windows of ~40 segments. Model file path in `.env`; strategy is skipped if absent.
-- **heuristic**: dialogue speaker from adjacent attribution verbs (`nói`, `hỏi`, `quát`, `gầm lên`, `thì thầm`, ...) and the nearest name or pronoun (`anh/hắn/ông` → male, `cô/nàng/bà` → female); emotion from verb lexicon and punctuation (`!` → intensity up, `...` → sad/tender, `?` neutral). Unknown → `unknown` gender, `neutral`.
+- **heuristic**: dialogue speaker from adjacent attribution verbs (`nói`, `hỏi`, `quát`, `gầm lên`, `thì thầm`, ...) and the nearest name or pronoun (`anh/hắn/ông` → male, `cô/nàng/bà` → female); emotion from verb lexicon and punctuation (`!` → intensity up, `...` → sad/tender, `?` neutral). Unknown → `unknown` gender, `neutral`. Consecutive dialogue pieces of one paragraph (a long quote split at 250 characters) are one utterance and share the attribution found after the run, else before it.
 
 Roster merge: new characters inserted; existing non-`manual` rows may update `gender` only when the new label has higher confidence; `manual` rows are never changed.
 
@@ -374,7 +395,7 @@ When the web app opens or advances to chapter N, it enqueues `fetch_chapter` and
 
 ### 5.9 Operations
 
-- `uv run worker` (foreground) or installed as a Windows service with NSSM (documented).
+- `uv run worker run` (foreground; `--once` drains the queue and exits; `uv run worker enqueue fetch-novel <url>` adds a job for testing without the web app) or installed as a Windows service with NSSM (documented).
 - Requires `ffmpeg` on PATH. First run downloads VieNeu weights.
 - `.env`: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `OPENROUTER_API_KEY`, `OPENROUTER_MODELS`, `OPENROUTER_LIMITS`, `LOCAL_LLM_PATH` (optional), `WORKER_ID`.
 - Logs: rotating file `worker/logs/worker.log`, level from env.
@@ -567,7 +588,7 @@ Each milestone gets its own implementation plan (writing-plans skill).
 |---|---|---|
 | M0 | Spikes | **Done** (2026-10-14). Results and decisions: `docs/superpowers/spikes/2026-10-14-m0-results.md`. S1 PASS by count rule, applied per pair (5 pairs enabled; female/happy and female/sad provisional), tags dropped; S2 shared-init cluster segments PASS (one-shot offline encode); S3 GPU OK (CPU unverified). Validation refs archived in `assets/voice-refs/m0/`. |
 | M1 | Foundation | **Done** (2026-10-15; owner account checks of 7.3.1 confirmed and cloud sign-in verified on 2026-10-19): v2 schema live on the reused project (migrations applied through the Management API because the CLI login-role path fails on this project; history recorded in `supabase_migrations.schema_migrations`), sign-up disabled, R2 bucket + tokens verified by `worker doctor`, CI green (https://github.com/TuanBew/AI-Truyen-Audio-Reader/actions/runs/38686602652). Original criteria: repo restructured, v1 removed, Supabase schema + RLS + `claim_job`, auth with single user, R2 bucket + tokens, CI green |
-| M2 | Worker core | Job loop with leases/heartbeat, truyenfull adapter with fixtures (prefix-matched `ads*` removal, end-anchored SEO strip), normalize + segment, heuristic strategy, VieNeu single-voice synthesis with quality guard (5.6 metric + threshold), RTF re-measured with `ref_audio` cloning (S3 measured presets only), ONNX CPU load fix + CPU RTF re-benchmark, `--fake-tts`. **Incremental encode validated:** per-segment PCM fed to one long-lived ffmpeg/libopus process with the 5.6 flags, clusters emitted and parsed incrementally from the pipe, uploaded as they appear, and played gaplessly through the M3 continuity test. `attempt` re-run path and seekable `full.webm` remux tested. Cost/abuse prerequisites from 7.3.1 (jobs write constraints + dedupe, r2_objects ledger, default privileges, storage API caps) land before the job loop and uploads. Worker performance budget from 7.3.2 (enqueue to claim < 2 s, first cluster < 10 s, pipelined synthesis/encode/upload). |
+| M2 | Worker core | Job loop with leases/heartbeat, truyenfull adapter with fixtures (prefix-matched `ads*` removal, end-anchored SEO strip), normalize + segment, heuristic strategy, VieNeu single-voice synthesis with quality guard (5.6 metric + threshold), RTF re-measured with `ref_audio` cloning (S3 measured presets only), ONNX CPU load fix + CPU RTF re-benchmark, `--fake-tts`. **Incremental encode validated:** per-segment PCM fed to one long-lived ffmpeg/libopus process with the 5.6 flags, clusters emitted and parsed incrementally from the pipe, uploaded as they appear, and played gaplessly through the M3 continuity test. `attempt` re-run path and seekable `full.webm` remux tested. Cost/abuse prerequisites from 7.3.1 (jobs write constraints + dedupe, r2_objects ledger, default privileges, storage API caps) land before the job loop and uploads. Worker performance budget from 7.3.2 (enqueue to claim < 2 s, first cluster < 10 s, pipelined synthesis/encode/upload). Split into M2a (`docs/superpowers/plans/2026-10-19-m2a-worker-core.md`: queue hardening, job loop, truyenfull adapter, text pipeline, heuristic) and M2b (synthesis, encode, R2 ledger and uploads). |
 | M3 | Web core | Library, novel page, reader layout A, MSE player (shared init + clusters, `duration` from `duration_ms`, reload on `attempt` change) with highlight + auto-scroll, AudioWorklet continuity test, progress, prefetch, worker-offline state; performance budget 7.3.2 enforced (proxy getClaims, route JS budgets in CI, Web Vitals logging, Lighthouse run) |
 | M4 | Multi-voice + emotion | OpenRouter strategy (free-model guard) + rate limiter, local LLM strategy, roster merge, cast drawer + speaker reassignment, voice bank + per-pair emotion refs (5 pairs from S1, preset voice elsewhere; no non-verbal tags), **female/happy + female/sad re-test** against a clone-from-neutral-ref baseline (disable if not audible beyond the timbre shift), notebook |
 | M5 | Features | Lexicon (global + novel), bookmarks + notes, stats, sleep timer, follow + scheduler, theme customizer, command palette, Edge fallback |
