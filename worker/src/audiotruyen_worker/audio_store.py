@@ -8,6 +8,8 @@ from typing import Any
 from audiotruyen_worker.text.normalize import LexiconRule
 from audiotruyen_worker.tts.base import VoiceRef
 
+DEFAULT_FLAGS = ("is_default_narrator", "is_default_male", "is_default_female")
+
 
 @dataclass(frozen=True)
 class AudioRow:
@@ -40,6 +42,8 @@ class AudioStore:
 
     def update(self, row: AudioRow, fields: dict[str, Any]) -> bool:
         """Fenced by attempt (spec 5.1): False when a newer attempt owns the row."""
+        if "id" in fields or "attempt" in fields:
+            raise ValueError("update() must not change id or attempt (they are the fence)")
         data = (
             self._db.table("chapter_audio")
             .update(fields)
@@ -83,27 +87,48 @@ class AudioStore:
         rows.sort(key=lambda r: (r["novel_id"] is not None, r["position"], r["id"]))
         return [LexiconRule(r["pattern"], r["replacement"], r["is_regex"]) for r in rows]
 
-    def upsert_preset_voice(
-        self, user_id: str, name: str, gender: str, *, narrator: bool, male: bool, female: bool
-    ) -> str:
+    def find_voice(self, user_id: str, name: str) -> dict[str, Any] | None:
+        data = (
+            self._db.table("voices")
+            .select("id,kind")
+            .eq("user_id", user_id)
+            .eq("name", name)
+            .limit(1)
+            .execute()
+            .data
+        )
+        return data[0] if data else None
+
+    def insert_preset_voice(self, user_id: str, name: str, gender: str) -> str:
         row = {
             "user_id": user_id,
             "name": name,
             "kind": "preset",
             "preset_name": name,
             "gender": gender,
-            "is_default_narrator": narrator,
-            "is_default_male": male,
-            "is_default_female": female,
         }
-        data = self._db.table("voices").upsert(row, on_conflict="user_id,name").execute().data
-        return data[0]["id"]
+        return self._db.table("voices").insert(row).execute().data[0]["id"]
 
-    def clear_default_flags(self, user_id: str) -> None:
-        for flag in ("is_default_narrator", "is_default_male", "is_default_female"):
-            self._db.table("voices").update({flag: False}).eq("user_id", user_id).eq(
-                flag, True
-            ).execute()
+    def set_default_if_unheld(self, user_id: str, voice_id: str, flag: str) -> bool:
+        """Mark voice_id as the user's default for `flag` unless some voice already holds it.
+        Never clears a flag (the voices_one_default_* indexes also reject a second holder)."""
+        if flag not in DEFAULT_FLAGS:
+            raise ValueError(f"unknown default flag {flag!r}")
+        held = (
+            self._db.table("voices")
+            .select("id")
+            .eq("user_id", user_id)
+            .eq(flag, True)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if held:
+            return False
+        self._db.table("voices").update({flag: True}).eq("id", voice_id).eq(
+            "user_id", user_id
+        ).execute()
+        return True
 
     # ---- R2 ledger ------------------------------------------------------------------------
 

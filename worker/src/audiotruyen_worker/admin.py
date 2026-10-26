@@ -66,17 +66,28 @@ DEFAULT_VOICES = (  # spec 1 / 5.10: Southern presets chosen by the owner in spi
 )
 
 
+_ROLE_FLAGS = {
+    "narrator": "is_default_narrator",
+    "male": "is_default_male",
+    "female": "is_default_female",
+}
+
+
 def init_voices(audio_store, user_id: str) -> list[str]:
-    """Create (or reset) the three default preset voices and their default flags."""
-    audio_store.clear_default_flags(user_id)
-    return [
-        audio_store.upsert_preset_voice(
-            user_id,
-            name,
-            gender,
-            narrator=role == "narrator",
-            male=role == "male",
-            female=role == "female",
-        )  # fmt: skip
-        for name, gender, role in DEFAULT_VOICES
-    ]
+    """Ensure the three default preset voices exist and hold any default role nobody holds yet.
+
+    Non-destructive: an existing voice with one of the names is never modified (even a clone),
+    and no default flag is ever cleared, so a custom narrator chosen by the owner survives.
+    Returns the ids of the three named voices, in DEFAULT_VOICES order."""
+    ids = []
+    for name, gender, role in DEFAULT_VOICES:
+        voice = audio_store.find_voice(user_id, name)
+        if voice is None:
+            voice_id = audio_store.insert_preset_voice(user_id, name, gender)
+            kind = "preset"
+        else:
+            voice_id, kind = voice["id"], voice["kind"]
+        if kind == "preset":
+            audio_store.set_default_if_unheld(user_id, voice_id, _ROLE_FLAGS[role])
+        ids.append(voice_id)
+    return ids
