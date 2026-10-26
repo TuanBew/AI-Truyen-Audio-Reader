@@ -25,15 +25,20 @@ Supabase (needs Docker Desktop running), from the repo root:
 
 Worker, from `worker/`:
 
-    uv sync
+    uv sync                       # no TTS (CI, fake TTS)
+    uv sync --extra cuda          # + VieNeu on the GPU (torch cu128, about 3 GB); --extra tts = CPU/ONNX only
     uv run pytest                 # unit tests; db tests skip without TEST_SUPABASE_* env
     uv run ruff check . && uv run ruff format --check .
     uv run worker doctor          # checks Supabase, R2, ffmpeg using worker/.env
-    uv run worker run             # job loop (search, fetch_novel, fetch_chapter); Ctrl+C to stop
+    uv run worker run             # job loop (search, fetch_novel, fetch_chapter, synthesize, cleanup_r2); preloads VieNeu, then runs GC; Ctrl+C to stop
     uv run worker run --once      # drain the queue once and exit
     uv run worker enqueue fetch-novel https://truyenfull.live/<slug>/   # test without the web app
+    uv run worker run --fake-tts  # sine tones instead of VieNeu (tests, E2E)
+    uv run worker init-voices     # create the default voices Đức Trí / Thái Sơn / Mỹ Duyên (non-destructive: only missing presets, a default role only when no voice holds it)
+    uv run worker enqueue synthesize <chapter-id>
+    uv run worker gc              # delete abandoned and stale audio from R2
 
-`worker/.env` points at the production Supabase project. To run the worker against local Supabase, override it in the shell (environment variables win over `.env`): from the repo root run `set -a; source <(bash scripts/supabase-test-env.sh); set +a; export SUPABASE_URL=$TEST_SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY=$TEST_SUPABASE_SERVICE_ROLE_KEY WORKER_ID=local-dev`, then `cd worker`. In a worktree without `worker/.env`, also export dummy `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` (the worker reads R2 settings at startup; nothing uploads before M2b).
+`worker/.env` points at the production Supabase project. To run the worker against local Supabase, override it in the shell (environment variables win over `.env`): from the repo root run `set -a; source <(bash scripts/supabase-test-env.sh); set +a; export SUPABASE_URL=$TEST_SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY=$TEST_SUPABASE_SERVICE_ROLE_KEY WORKER_ID=local-dev`, then `cd worker`. In a worktree without `worker/.env`, also export dummy `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` (the worker reads R2 settings at startup; only `synthesize` and `cleanup_r2` jobs and `worker gc` touch R2, so dummies are enough for the other jobs).
 
 Load local Supabase test env for `db` tests (Git Bash, repo root):
 
@@ -52,6 +57,7 @@ Web, from `web/`:
 - UI copy is Vietnamese.
 - Cost and abuse protection requirements are in spec 7.3.1 and bind every change touching R2, Vercel or Edge TTS.
 - Scraping goes through `sources/http.py` `PoliteClient` only (1.0-1.5 s spacing, allowed hosts); never add code that solves or bypasses Cloudflare challenges.
+- Every R2 upload goes through `storage/guard.py` `GuardedStorage.put` (kill switch, byte and PUT caps, ledger); never call `R2Storage.put_bytes` for audio directly.
 
 ## Database rules
 
