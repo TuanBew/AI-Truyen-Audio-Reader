@@ -143,3 +143,29 @@ def test_fake_tts_output_still_gives_a_finite_ratio():
 
     ratio = hf_ratio(FakeTTS().synthesize("Xin chào các bạn", VoiceRef("v"), "neutral", 0.0))
     assert ratio is not None and np.isfinite(ratio)
+
+
+def _write_clip(path, audio):
+    import soundfile as sf
+
+    sf.write(path, audio, SR, subtype="FLOAT")
+    return str(path)
+
+
+def test_baseline_ignores_non_finite_ratios_from_defective_references(tmp_path):
+    rng = np.random.default_rng(4)
+    hiss_clip = _write_clip(tmp_path / "hiss.wav", rng.normal(0, 0.1, SR).astype(np.float32))
+    nan_audio = tone(1.0)
+    nan_audio[1000] = np.nan
+    nan_clip = _write_clip(tmp_path / "nan.wav", nan_audio)
+    baselines = Baselines(_CountingTTS())
+    assert baselines(VoiceRef("c1", ref_path=hiss_clip)) == DEFAULT_BASELINE
+    assert baselines(VoiceRef("c2", ref_path=nan_clip)) == DEFAULT_BASELINE
+
+
+def test_baseline_calibration_with_a_hissy_take_falls_back_to_default():
+    class _HissTTS(_CountingTTS):
+        def synthesize(self, text, voice, emotion, intensity):
+            return np.random.default_rng(5).normal(0, 0.1, SR).astype(np.float32)
+
+    assert Baselines(_HissTTS())(VoiceRef("v9", preset="Hải Đăng")) == DEFAULT_BASELINE

@@ -5,6 +5,7 @@ once with a fixed sentence; clone voices use their reference clip. Cached per vo
 from __future__ import annotations
 
 import logging
+import math
 import threading
 from pathlib import Path
 
@@ -58,4 +59,7 @@ class Baselines:
                 ratio = _clip_ratio(Path(voice.ref_path))
         except Exception:  # the guard must never block synthesis
             log.exception("baseline for %s failed; using the default", voice.voice_id)
-        return ratio if ratio else DEFAULT_BASELINE
+        # an inf or zero ratio must not become the baseline (inf would disable the guard)
+        if ratio is not None and math.isfinite(ratio) and ratio > 0:
+            return ratio
+        return DEFAULT_BASELINE
