@@ -30,7 +30,7 @@ Worker, from `worker/`:
     uv run pytest                 # unit tests; db tests skip without TEST_SUPABASE_* env
     uv run ruff check . && uv run ruff format --check .
     uv run worker doctor          # checks Supabase, R2, ffmpeg using worker/.env
-    uv run worker run             # job loop (search, fetch_novel, fetch_chapter, synthesize, cleanup_r2); preloads VieNeu, then runs GC; Ctrl+C to stop
+    uv run worker run             # job loop (search, fetch_novel, fetch_chapter, synthesize, cleanup_r2); starts the VieNeu preload (background thread), then runs GC; Ctrl+C to stop
     uv run worker run --once      # drain the queue once and exit
     uv run worker enqueue fetch-novel https://truyenfull.live/<slug>/   # test without the web app
     uv run worker run --fake-tts  # sine tones instead of VieNeu (tests, E2E)
@@ -38,7 +38,7 @@ Worker, from `worker/`:
     uv run worker enqueue synthesize <chapter-id>
     uv run worker gc              # delete abandoned and stale audio from R2
 
-`worker/.env` points at the production Supabase project. To run the worker against local Supabase, override it in the shell (environment variables win over `.env`): from the repo root run `set -a; source <(bash scripts/supabase-test-env.sh); set +a; export SUPABASE_URL=$TEST_SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY=$TEST_SUPABASE_SERVICE_ROLE_KEY WORKER_ID=local-dev`, then `cd worker`. In a worktree without `worker/.env`, also export dummy `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` (the worker reads R2 settings at startup; only `synthesize` and `cleanup_r2` jobs and `worker gc` touch R2, so dummies are enough for the other jobs).
+`worker/.env` holds the production Supabase AND R2 credentials. To run the worker against local Supabase, override them in the shell (environment variables win over `.env`): from the repo root run `set -a; source <(bash scripts/supabase-test-env.sh); set +a; export SUPABASE_URL=$TEST_SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY=$TEST_SUPABASE_SERVICE_ROLE_KEY WORKER_ID=local-dev`, then `cd worker`. The Supabase overrides do not cover R2: before any command that touches R2 (`worker run` handling `synthesize` or `cleanup_r2`, `worker gc`, `enqueue synthesize` + `run --once`, even with `--fake-tts`), also export the local S3 overrides (`R2_ENDPOINT_URL`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` from `supabase status -o env`, as in the GPU smoke recipe in the M2b plan) or the run writes to production R2. `R2_UPLOADS_ENABLED=false` blocks uploads only, not GC and cleanup deletes, so those always need the overrides. In a worktree without `worker/.env`, export dummy `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` (the worker reads R2 settings at startup; dummies are enough for jobs that do not touch R2).
 
 Load local Supabase test env for `db` tests (Git Bash, repo root):
 
