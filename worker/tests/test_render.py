@@ -110,8 +110,43 @@ def test_failed_segment_retries_then_falls_back_to_the_narrator():
 def test_segment_that_always_fails_becomes_silence_with_a_warning():
     rec = Recorder()
     result = renderer(rec, tts=FlakyTTS(fail_times=99)).render(plans(2))
-    assert {"segment": 0, "code": "tts_failed"} in result.warnings
-    assert result.duration_ms > 0
+    assert result.warnings == [
+        {"segment": 0, "code": "tts_failed"},
+        {"segment": 1, "code": "tts_failed"},
+    ]
+    assert result.timings[0] == pytest.approx((0, 500), abs=1)  # 500 ms of silence, not trimmed
+    assert result.timings[1] == pytest.approx((750, 1250), abs=1)  # after the 250 ms pause
+    assert result.duration_ms == pytest.approx(1500, abs=1)
+
+
+class NoisyThenDeadTTS(FakeTTS):
+    def __init__(self):
+        self.calls = 0
+
+    def synthesize(self, text, voice, emotion, intensity):
+        self.calls += 1
+        if self.calls > 1:
+            raise RuntimeError("cuda oom")
+        audio = super().synthesize(text, voice, emotion, intensity)
+        rng = np.random.default_rng(0)
+        return audio + rng.normal(0, 0.02, audio.shape).astype(np.float32)
+
+
+def test_failed_retakes_never_replace_an_audible_noisy_take():
+    rec = Recorder()
+    r = ChapterRenderer(
+        NoisyThenDeadTTS(), rec.upload, rec.on_progress, PREFIX, lambda v: 2e-5, NARRATOR
+    )
+    result = r.render(plans(1))  # 60 chars = 3.3 s of (noisy) speech
+    start, end = result.timings[0]
+    assert end - start > 3000
+    assert result.warnings == [{"segment": 0, "code": "quality_guard_exhausted"}]
+
+
+def test_warnings_do_not_leak_between_renders():
+    r = renderer(Recorder(), tts=FlakyTTS(fail_times=99))
+    assert len(r.render(plans(1)).warnings) == 1
+    assert len(r.render(plans(1)).warnings) == 1
 
 
 class NoisyThenCleanTTS(FakeTTS):
@@ -142,6 +177,20 @@ def test_superseded_attempt_stops_uploading():
     keys = [k for k, _, _ in rec.uploads]
     assert PREFIX + "/full.webm" not in keys
     assert len([k for k in keys if "/seg-" in k]) <= 3  # stops right after the fence trips
+
+
+def test_upload_error_is_raised_and_stops_everything_after_it():
+    rec = Recorder()
+
+    def failing_upload(key, data, content_type):
+        if key.endswith("seg-0001.webm"):
+            raise ValueError("r2 down")
+        return rec.upload(key, data, content_type)
+
+    r = ChapterRenderer(FakeTTS(), failing_upload, rec.on_progress, PREFIX, lambda v: 1.0, NARRATOR)
+    with pytest.raises(ValueError, match="r2 down"):
+        r.render(plans(30))
+    assert [k for k, _, _ in rec.uploads] == [PREFIX + "/init.webm", PREFIX + "/seg-0000.webm"]
 
 
 def test_cancellation_stops_the_render():

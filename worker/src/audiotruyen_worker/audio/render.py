@@ -80,8 +80,9 @@ class ChapterRenderer:
 
     # ---- synthesis -----------------------------------------------------------------------
 
-    def _speak(self, plan: SegmentPlan) -> np.ndarray:
-        """Retry once, then the voice's neutral form, then the default narrator; never raises."""
+    def _speak(self, plan: SegmentPlan) -> np.ndarray | None:
+        """Retry once, then the voice's neutral form, then the default narrator. None when every
+        attempt failed or came back empty; never raises."""
         attempts: list[tuple[str, VoiceRef]] = [("voice", plan.voice), ("retry", plan.voice)]
         if plan.voice.ref_path and plan.voice.preset:
             attempts.append(("neutral", VoiceRef(plan.voice.voice_id, preset=plan.voice.preset)))
@@ -93,19 +94,25 @@ class ChapterRenderer:
             except Exception as exc:  # a segment never blocks the chapter
                 log.warning("segment %d: TTS failed (%s): %s", plan.i, step, type(exc).__name__)
                 continue
+            if not len(audio):
+                continue
             if step != "voice":
                 self._warnings.append({"segment": plan.i, "code": f"tts_fallback_{step}"})
-            if len(audio):
-                return audio
-        self._warnings.append({"segment": plan.i, "code": "tts_failed"})
-        return np.zeros(FAILED_SEGMENT_MS * SAMPLE_RATE // 1000, dtype=np.float32)
+            return audio
+        return None
 
-    def _synthesize(self, plan: SegmentPlan) -> np.ndarray:
-        """Quality guard: re-synthesize noisy takes up to GUARD_RETRIES times, keep the best."""
+    def _synthesize(self, plan: SegmentPlan) -> np.ndarray | None:
+        """Quality guard: re-synthesize noisy takes up to GUARD_RETRIES times, keep the best.
+        A failed take never replaces an audible one; None (plus a tts_failed warning) only when
+        no take produced audio at all."""
         baseline = self._baseline_for(plan.voice)
         best: tuple[float, np.ndarray] | None = None
         for take in range(1 + GUARD_RETRIES):
             audio = self._speak(plan)
+            if audio is None:
+                if best is None:
+                    break  # nothing audible: retrying a dead voice only burns time
+                continue
             ratio = hf_ratio(audio)  # raw output, like the baselines
             score = ratio if ratio is not None else 0.0
             if best is None or score < best[0]:
@@ -115,12 +122,15 @@ class ChapterRenderer:
             log.info("segment %d: noisy take %d (ratio %.2e)", plan.i, take, score)
         else:
             self._warnings.append({"segment": plan.i, "code": "quality_guard_exhausted"})
-        assert best is not None
+        if best is None:
+            self._warnings.append({"segment": plan.i, "code": "tts_failed"})
+            return None
         return best[1]
 
     # ---- render ----------------------------------------------------------------------------
 
     def render(self, plans: Sequence[SegmentPlan]) -> RenderResult:
+        self._warnings = []
         encoder = StreamEncoder(self._ffmpeg)
         encoder.start()
         uploaded: list[bytes] = []
@@ -175,9 +185,13 @@ class ChapterRenderer:
                 self._check()
                 if stop.is_set():
                     break
-                pcm, speech_len = finish_segment(
-                    self._synthesize(plan), plan.emotion, plan.paragraph_end
-                )
+                audio = self._synthesize(plan)
+                if audio is None:  # exactly FAILED_SEGMENT_MS of silence, never trimmed away
+                    gap = np.zeros(FAILED_SEGMENT_MS * SAMPLE_RATE // 1000, dtype=np.float32)
+                    pause, _ = finish_segment(gap[:0], plan.emotion, plan.paragraph_end)
+                    pcm, speech_len = np.concatenate([gap, pause]), len(gap)
+                else:
+                    pcm, speech_len = finish_segment(audio, plan.emotion, plan.paragraph_end)
                 start_ms = round(samples * 1000 / SAMPLE_RATE)
                 timings[plan.i] = (start_ms, round((samples + speech_len) * 1000 / SAMPLE_RATE))
                 try:
