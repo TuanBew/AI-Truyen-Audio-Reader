@@ -8,7 +8,7 @@ import logging
 from typing import Any
 
 from audiotruyen_worker.audio.render import AttemptSuperseded, ChapterRenderer, SegmentPlan
-from audiotruyen_worker.audio_store import AudioStore
+from audiotruyen_worker.audio_store import AudioRow, AudioStore
 from audiotruyen_worker.jobs.handlers import (
     ChapterPreparer,
     owned_chapter,
@@ -27,10 +27,19 @@ log = logging.getLogger(__name__)
 NO_NARRATOR = "Chưa có giọng đọc mặc định. Chạy: uv run worker init-voices"
 STALE_SETTINGS = "Cài đặt giọng đọc hoặc từ điển phát âm đã đổi; job này không còn cần chạy."
 SUPERSEDED = "Một lượt tạo audio mới hơn đã thay thế lượt này."
+NO_TEXT = "Chương không có nội dung để đọc."
 
 
 def audio_prefix(novel_id: str, chapter_id: str, voice_hash: str, attempt: int) -> str:
     return f"audio/{novel_id}/{chapter_id}/{voice_hash}/{attempt}/"
+
+
+def _mark_failed(audio_store: AudioStore, audio: AudioRow) -> None:
+    """Best effort: a failure here must never mask the error that is being handled."""
+    try:
+        audio_store.update(audio, {"status": "failed"})
+    except Exception:
+        log.exception("could not mark chapter_audio %s failed", audio.id)
 
 
 def make_synthesize_handler(
@@ -69,6 +78,10 @@ def make_synthesize_handler(
                     )
                 )
 
+        if not plans:
+            _mark_failed(audio_store, audio)
+            raise PermanentJobError(NO_TEXT)
+
         def progress(init_key: str, chunks: list[dict]) -> bool:
             return audio_store.update(
                 audio, {"init_key": init_key, "chunks": chunks, "status": "partial"}
@@ -91,7 +104,7 @@ def make_synthesize_handler(
         except JobCancelled:
             raise  # lease lost: the next attempt takes over; write nothing
         except Exception:
-            audio_store.update(audio, {"status": "failed"})
+            _mark_failed(audio_store, audio)
             raise
 
         segments = []

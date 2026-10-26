@@ -3,9 +3,15 @@ import pytest
 from audiotruyen_worker.audio_store import AudioRow
 from audiotruyen_worker.jobs.handlers import ChapterPreparer
 from audiotruyen_worker.jobs.queue import Job
-from audiotruyen_worker.jobs.runner import JobContext, JobSkipped, PermanentJobError
+from audiotruyen_worker.jobs.runner import (
+    JobCancelled,
+    JobContext,
+    JobSkipped,
+    PermanentJobError,
+)
 from audiotruyen_worker.jobs.synthesize import (
     NO_NARRATOR,
+    NO_TEXT,
     STALE_SETTINGS,
     SUPERSEDED,
     audio_prefix,
@@ -154,9 +160,10 @@ def test_missing_narrator_is_permanent():
 
 
 def test_ready_row_is_not_synthesized_again():
-    tts = RecordingTTS()
-    result = handler(audio=FakeAudioStore(status="ready"), tts=tts)(job(), JobContext(job()))
+    tts, audio = RecordingTTS(), FakeAudioStore(status="ready")
+    result = handler(audio=audio, tts=tts)(job(), JobContext(job()))
     assert result["already_ready"] is True and tts.texts == []
+    assert audio.updates == []
 
 
 def test_superseded_attempt_is_skipped():
@@ -187,3 +194,49 @@ def test_failure_after_begin_marks_the_row_failed():
 def test_bad_payloads_are_permanent(payload):
     with pytest.raises(PermanentJobError):
         handler()(job(payload), JobContext(job(payload)))
+
+
+class FinalWriteLost(FakeAudioStore):
+    def update(self, row, fields):
+        super().update(row, fields)
+        return fields.get("status") != "ready"
+
+
+def test_lost_fence_on_the_final_write_is_skipped_without_failing_the_row():
+    audio = FinalWriteLost()
+    with pytest.raises(JobSkipped, match=SUPERSEDED):
+        handler(audio=audio)(job(), JobContext(job()))
+    assert audio.updates[-1]["status"] == "ready"
+    assert not any(u == {"status": "failed"} for u in audio.updates)
+
+
+def test_lease_lost_mid_render_writes_nothing_more():
+    ctx = JobContext(job())
+
+    class CancellingTTS(RecordingTTS):
+        def synthesize(self, text, voice, emotion, intensity):
+            ctx.cancelled.set()  # the heartbeat thread lost the lease
+            return super().synthesize(text, voice, emotion, intensity)
+
+    audio = FakeAudioStore()
+    with pytest.raises(JobCancelled):
+        handler(audio=audio, tts=CancellingTTS())(job(), ctx)
+    assert not any(u.get("status") in ("failed", "ready") for u in audio.updates)
+
+
+def test_failed_marker_error_does_not_mask_the_original_failure():
+    class BrokenFailedWrite(FakeAudioStore):
+        def update(self, row, fields):
+            if fields.get("status") == "failed":
+                raise RuntimeError("supabase down")
+            return super().update(row, fields)
+
+    with pytest.raises(ConnectionError, match="r2 down"):
+        handler(audio=BrokenFailedWrite(), storage=FailingUpload())(job(), JobContext(job()))
+
+
+def test_chapter_without_speakable_text_is_permanent_and_marks_the_row_failed():
+    audio, tts = FakeAudioStore(), RecordingTTS()
+    with pytest.raises(PermanentJobError, match=NO_TEXT):
+        handler(store=FakeStore(text="…\n—"), audio=audio, tts=tts)(job(), JobContext(job()))
+    assert audio.updates == [{"status": "failed"}] and tts.texts == []
