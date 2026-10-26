@@ -57,3 +57,26 @@ def enqueue_job(client, user_id: str, job_type: str, value: str, priority: int =
         raise ValueError(f"cannot enqueue job type {job_type!r}")
     row = {"user_id": user_id, "type": job_type, "payload": {key: value}, "priority": priority}
     return client.table("jobs").insert(row).execute().data[0]["id"]
+
+
+DEFAULT_VOICES = (  # spec 1 / 5.10: Southern presets chosen by the owner in spike S1
+    ("Đức Trí", "male", "narrator"),
+    ("Thái Sơn", "male", "male"),
+    ("Mỹ Duyên", "female", "female"),
+)
+
+
+def init_voices(audio_store, user_id: str) -> list[str]:
+    """Create (or reset) the three default preset voices and their default flags."""
+    audio_store.clear_default_flags(user_id)
+    return [
+        audio_store.upsert_preset_voice(
+            user_id,
+            name,
+            gender,
+            narrator=role == "narrator",
+            male=role == "male",
+            female=role == "female",
+        )  # fmt: skip
+        for name, gender, role in DEFAULT_VOICES
+    ]

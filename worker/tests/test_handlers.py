@@ -57,10 +57,10 @@ class FakeAdapter:
 
 
 class FakeStore:
-    def __init__(self, events=None, chapter_row=None, analysis=False):
+    def __init__(self, events=None, chapter_row=None, cached=False):
         self.events = events if events is not None else []
         self.chapter_row = chapter_row
-        self.analysis = analysis
+        self.cached = cached
         self.saved_text = None
         self.saved_analysis = None
 
@@ -83,8 +83,11 @@ class FakeStore:
     def roster(self, novel_id):
         return []
 
-    def has_analysis(self, chapter_id, digest, strategy, version):
-        return self.analysis
+    def chapter_text(self, chapter_id):
+        return None
+
+    def analysis(self, chapter_id, digest, strategy, version):
+        return [{"i": n} for n in range(3)] if self.cached else None
 
     def save_analysis(self, user_id, chapter_id, digest, strategy, version, segments):
         self.saved_analysis = (strategy, version, segments)
@@ -173,7 +176,7 @@ class CountingStrategy(HeuristicStrategy):
 
 def test_fetch_chapter_skips_unchanged_text_and_existing_analysis():
     row = ChapterRow(CHAPTER, USER, "novel-uuid", 1, "u", text_hash(TEXT))
-    store = FakeStore(chapter_row=row, analysis=True)
+    store = FakeStore(chapter_row=row, cached=True)
     strategy = CountingStrategy()
     result = make_handlers(FakeAdapter(text=TEXT), store, [strategy])["fetch_chapter"](
         job("fetch_chapter", {"chapter_id": CHAPTER}), JobContext(job())
@@ -185,7 +188,7 @@ def test_fetch_chapter_skips_unchanged_text_and_existing_analysis():
 
 def test_fetch_chapter_analyzes_unchanged_text_without_cached_analysis():
     row = ChapterRow(CHAPTER, USER, "novel-uuid", 1, "u", text_hash(TEXT))
-    store = FakeStore(chapter_row=row, analysis=False)
+    store = FakeStore(chapter_row=row, cached=False)
     strategy = CountingStrategy()
     make_handlers(FakeAdapter(text=TEXT), store, [strategy])["fetch_chapter"](
         job("fetch_chapter", {"chapter_id": CHAPTER}), JobContext(job())
