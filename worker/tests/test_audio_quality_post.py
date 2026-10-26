@@ -103,3 +103,43 @@ def test_finish_segment_reports_speech_length():
     pcm, speech = finish_segment(tone(0.5), "neutral", False)
     assert len(pcm) == speech + 250 * SR // 1000
     assert pcm.dtype == np.float32
+
+
+def test_heavy_hiss_fails_closed_not_open():
+    rng = np.random.default_rng(2)
+    noisy = tone(1.0) + rng.normal(0, 0.1, SR).astype(np.float32)
+    white = rng.normal(0, 0.1, SR).astype(np.float32)
+    assert hf_ratio(noisy) == float("inf") and is_noisy(hf_ratio(noisy), 0.56e-3)
+    assert hf_ratio(white) == float("inf") and is_noisy(hf_ratio(white), 0.56e-3)
+
+
+def test_short_or_quiet_takes_still_skip_the_guard():
+    rng = np.random.default_rng(3)
+    assert hf_ratio(rng.normal(0, 0.1, int(0.2 * SR)).astype(np.float32)) is None  # < 0.5 s
+    assert hf_ratio(rng.normal(0, 0.005, SR).astype(np.float32)) is None  # whispered overall
+
+
+@pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
+def test_non_finite_take_is_defective_without_warnings(bad):
+    import warnings
+
+    audio = tone(1.0)
+    audio[1000] = bad
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        ratio = hf_ratio(audio)
+    assert ratio == float("inf") and is_noisy(ratio, 0.56e-3)
+
+
+def test_finish_segment_scrubs_non_finite_samples():
+    audio = tone(0.5)
+    audio[100], audio[200], audio[300] = np.nan, np.inf, -np.inf
+    pcm, speech = finish_segment(audio, "neutral", False)
+    assert np.isfinite(pcm).all() and speech > 0
+
+
+def test_fake_tts_output_still_gives_a_finite_ratio():
+    from audiotruyen_worker.tts.fake import FakeTTS
+
+    ratio = hf_ratio(FakeTTS().synthesize("Xin chào các bạn", VoiceRef("v"), "neutral", 0.0))
+    assert ratio is not None and np.isfinite(ratio)

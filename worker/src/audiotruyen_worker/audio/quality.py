@@ -10,6 +10,7 @@ FRAME = int(0.040 * SAMPLE_RATE)  # 40 ms Hann frames
 HOP = int(0.020 * SAMPLE_RATE)  # 20 ms hop
 MIN_RMS = 0.03
 MAX_ZCR = 0.06
+MIN_GUARDED = SAMPLE_RATE // 2  # 0.5 s: a longer loud take with no vowel-like frame is all hiss
 GUARD_FACTOR = 2.5  # re-synthesize when ratio > 2.5 x the voice baseline (tune on real chapters)
 
 _WINDOW = np.hanning(FRAME).astype(np.float32)
@@ -19,11 +20,17 @@ _HIGH = (_FREQS >= 4000) & (_FREQS < 12000)
 
 
 def hf_ratio(pcm: np.ndarray) -> float | None:
-    """Median HF/LF power ratio over vowel-like frames, or None when no frame qualifies
-    (very short or whispered segments skip the guard)."""
+    """Median HF/LF power ratio over vowel-like frames.
+
+    Returns inf (always noisy, the renderer retries) for a take with non-finite samples, and for
+    a take of at least 0.5 s that is loud overall yet has no vowel-like frame (pure hiss fails
+    the ZCR gate). Returns None, skipping the guard, for takes shorter than one frame, shorter
+    than 0.5 s without a qualifying frame, or quiet overall (whispered)."""
     x = np.asarray(pcm, dtype=np.float32)
     if x.ndim != 1:
         raise ValueError("mono audio expected")
+    if not np.isfinite(x).all():
+        return float("inf")
     if len(x) < FRAME:
         return None
     count = 1 + (len(x) - FRAME) // HOP
@@ -33,7 +40,8 @@ def hf_ratio(pcm: np.ndarray) -> float | None:
     zcr = np.mean(signs[:, 1:] != signs[:, :-1], axis=1)
     keep = (rms >= MIN_RMS) & (zcr <= MAX_ZCR)
     if not keep.any():
-        return None
+        loud = len(x) >= MIN_GUARDED and float(np.sqrt(np.mean(x * x))) >= MIN_RMS
+        return float("inf") if loud else None
     spectrum = np.abs(np.fft.rfft(frames[keep] * _WINDOW, axis=1)) ** 2
     low = spectrum[:, _LOW].sum(axis=1)
     high = spectrum[:, _HIGH].sum(axis=1)

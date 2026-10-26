@@ -44,6 +44,8 @@ def normalize(pcm: np.ndarray) -> np.ndarray:
 def finish_segment(pcm: np.ndarray, emotion: str, paragraph_end: bool) -> tuple[np.ndarray, int]:
     """Trimmed, normalized speech followed by the emotion/paragraph pause (float32 mono), and
     the number of speech samples before the pause (for segment timings)."""
-    speech = normalize(trim(np.asarray(pcm, dtype=np.float32)))
+    # last resort for a best-of-retries take that still has NaN/inf: never let it reach ffmpeg
+    clean = np.nan_to_num(np.asarray(pcm, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+    speech = normalize(trim(clean))
     silence = np.zeros(pause_ms(emotion, paragraph_end) * SAMPLE_RATE // 1000, dtype=np.float32)
     return np.concatenate([speech, silence]), len(speech)
