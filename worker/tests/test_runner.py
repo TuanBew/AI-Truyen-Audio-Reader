@@ -222,3 +222,39 @@ def test_run_forever_wakes_early_and_clears_the_wake():
     stop.set()
     loop.join(1.5)
     assert not loop.is_alive()
+
+
+def test_skipped_job_ends_cancelled_with_the_reason():
+    from audiotruyen_worker.jobs.runner import JobSkipped
+
+    def skip(j, c):
+        raise JobSkipped("Cài đặt đã đổi.")
+
+    queue = FakeQueue([job()])
+    Runner(queue, {"search": skip}, version="v", device="cpu").run_once()
+    assert queue.finished == [("j1", "cancelled", {"reason": "Cài đặt đã đổi."})]
+    assert queue.failed == []
+
+
+def test_device_may_be_a_callable_read_at_each_beat():
+    state = {"device": "loading"}
+    queue = FakeQueue()
+    seen = []
+    queue.heartbeat = lambda version, device, job_id: seen.append(device) or True
+    runner = Runner(queue, {}, version="v", device=lambda: state["device"])
+    runner.beat()
+    state["device"] = "cuda"
+    runner.beat()
+    assert seen == ["loading", "cuda"]
+
+
+def test_audio_failures_map_to_owner_messages():
+    from audiotruyen_worker.audio.encoder import EncoderError
+    from audiotruyen_worker.storage.guard import UploadBlocked
+    from audiotruyen_worker.tts.vieneu_provider import TTSUnavailable
+
+    assert describe_failure(UploadBlocked("Kho R2 đầy.")) == ("Kho R2 đầy.", False)
+    message, retryable = describe_failure(TTSUnavailable("no vieneu"))
+    assert "uv sync --extra cuda" in message and retryable is False
+    message, retryable = describe_failure(EncoderError("boom"))
+    assert "ffmpeg" in message and "boom" not in message and retryable is True
