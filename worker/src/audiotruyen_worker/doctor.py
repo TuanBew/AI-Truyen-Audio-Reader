@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -44,3 +45,12 @@ def check_ffmpeg() -> str:
     if not path:
         raise FileNotFoundError("ffmpeg is not on PATH (needed from M2)")
     return path
+
+
+def check_libopus(ffmpeg: str = "ffmpeg") -> str:
+    out = subprocess.run(
+        [ffmpeg, "-hide_banner", "-encoders"], capture_output=True, text=True, check=True
+    ).stdout
+    if " libopus " not in out:
+        raise RuntimeError("ffmpeg has no libopus encoder (install a full ffmpeg build)")
+    return "libopus encoder available"

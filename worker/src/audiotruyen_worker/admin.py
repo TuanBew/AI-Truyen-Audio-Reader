@@ -91,3 +91,27 @@ def init_voices(audio_store, user_id: str) -> list[str]:
             audio_store.set_default_if_unheld(user_id, voice_id, _ROLE_FLAGS[role])
         ids.append(voice_id)
     return ids
+
+
+def enqueue_synthesize(client, user_id: str, chapter_id: str, priority: int = 0) -> str:
+    """Insert a synthesize job for an owned chapter with the novel's current voice_hash."""
+    rows = (
+        client.table("chapters")
+        .select("novel_id")
+        .eq("id", chapter_id)
+        .eq("user_id", user_id)
+        .execute()
+        .data
+    )
+    if not rows:
+        raise LookupError(f"no chapter {chapter_id} for this owner")
+    voice_hash = (
+        client.rpc("current_voice_hash", {"p_novel_id": rows[0]["novel_id"]}).execute().data
+    )
+    row = {
+        "user_id": user_id,
+        "type": "synthesize",
+        "payload": {"chapter_id": chapter_id, "voice_hash": voice_hash},
+        "priority": priority,
+    }
+    return client.table("jobs").insert(row).execute().data[0]["id"]
