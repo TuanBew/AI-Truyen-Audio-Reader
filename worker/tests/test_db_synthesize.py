@@ -22,6 +22,16 @@ pytestmark = pytest.mark.db
 TEXT = "“Ngươi dám!” Lâm Phong quát.\nTrời tối dần. " + "Gió thổi qua rừng già. " * 40
 
 
+WORKER_IDS = ("w-m2b", "w-m2b-2")
+
+
+@pytest.fixture(autouse=True)
+def _clean_worker_status(admin_client):
+    yield
+    for worker_id in WORKER_IDS:  # runs even when an assertion failed
+        admin_client.table("worker_status").delete().eq("worker_id", worker_id).execute()
+
+
 @pytest.fixture
 def r2():
     with mock_aws():
@@ -90,7 +100,6 @@ def test_synthesize_job_end_to_end_then_cleanup_on_delete(admin_client, owner, r
     assert runner.run_once() is True  # the cleanup_r2 job the delete trigger enqueued
     assert audio.live_keys(prefix) == []
     assert not any(r2.exists(k) for k in keys)
-    admin_client.table("worker_status").delete().eq("worker_id", "w-m2b").execute()
 
 
 def test_outdated_voice_hash_job_is_cancelled(admin_client, owner, r2):

@@ -93,6 +93,10 @@ def init_voices(audio_store, user_id: str) -> list[str]:
     return ids
 
 
+class ChapterNotFound(LookupError):
+    """The chapter id does not exist for this owner (distinct from a missing account)."""
+
+
 def enqueue_synthesize(client, user_id: str, chapter_id: str, priority: int = 0) -> str:
     """Insert a synthesize job for an owned chapter with the novel's current voice_hash."""
     rows = (
@@ -104,7 +108,7 @@ def enqueue_synthesize(client, user_id: str, chapter_id: str, priority: int = 0)
         .data
     )
     if not rows:
-        raise LookupError(f"no chapter {chapter_id} for this owner")
+        raise ChapterNotFound(f"no chapter {chapter_id} for this owner")
     voice_hash = (
         client.rpc("current_voice_hash", {"p_novel_id": rows[0]["novel_id"]}).execute().data
     )

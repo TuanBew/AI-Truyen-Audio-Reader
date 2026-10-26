@@ -231,3 +231,23 @@ def test_enqueue_synthesize_uses_the_current_voice_hash():
     ]
     with pytest.raises(LookupError):
         enqueue_synthesize(_AudioClient([]), "u1", "c-1")
+
+
+def test_enqueue_synthesize_for_an_unknown_chapter_says_chapter_not_account(monkeypatch, capsys):
+    from audiotruyen_worker import admin
+    from audiotruyen_worker.admin import ChapterNotFound
+
+    _patch_enqueue(monkeypatch)
+    monkeypatch.setattr(admin, "enqueue_synthesize", _raiser(ChapterNotFound("no chapter")))
+    assert cli.main(["enqueue", "synthesize", "c-404"]) == 1
+    err = capsys.readouterr().err
+    assert "Không tìm thấy chương này." in err
+    assert "tài khoản" not in err
+
+
+def test_enqueue_synthesize_without_a_single_account_still_asks_for_email(monkeypatch, capsys):
+    _patch_enqueue(monkeypatch, resolve=_raiser(LookupError("expected exactly one account")))
+    assert cli.main(["enqueue", "synthesize", "c-1"]) == 1
+    err = capsys.readouterr().err
+    assert "Không tìm thấy tài khoản. Dùng --email để chọn tài khoản." in err
+    assert "chương" not in err

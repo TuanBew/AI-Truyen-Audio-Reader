@@ -87,7 +87,12 @@ def _run(once: bool, fake_tts: bool) -> int:
 def _enqueue(kind: str, value: str, email: str | None, priority: int) -> int:
     from postgrest.exceptions import APIError
 
-    from audiotruyen_worker.admin import enqueue_job, enqueue_synthesize, resolve_owner_id
+    from audiotruyen_worker.admin import (
+        ChapterNotFound,
+        enqueue_job,
+        enqueue_synthesize,
+        resolve_owner_id,
+    )
     from audiotruyen_worker.db import make_client
 
     if not value.strip():
@@ -103,6 +108,9 @@ def _enqueue(kind: str, value: str, email: str | None, priority: int) -> int:
             job_id = enqueue_synthesize(client, owner, value.strip(), priority)
         else:
             job_id = enqueue_job(client, owner, kind.replace("-", "_"), value, priority)
+    except ChapterNotFound:
+        print("Không tìm thấy chương này.", file=sys.stderr)
+        return 1
     except LookupError:
         print("Không tìm thấy tài khoản. Dùng --email để chọn tài khoản.", file=sys.stderr)
         return 1

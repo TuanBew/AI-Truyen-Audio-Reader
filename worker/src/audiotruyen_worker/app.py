@@ -87,6 +87,8 @@ def run_worker(settings: Settings, *, once: bool = False, fake_tts: bool = False
     """Run until Ctrl+C. With once=True, drain the queue and return (no Realtime, no heartbeat)."""
     tts = make_tts(settings, fake=fake_tts)
     runner, audio_store, r2 = build_runner(settings, tts)
+    if not once:
+        preload(tts)  # first, so the GC below never delays the ~30 s model load (spec 7.3.2)
     try:
         run_gc(audio_store, r2)
     except Exception:  # GC is housekeeping; never block the worker on it
@@ -96,7 +98,6 @@ def run_worker(settings: Settings, *, once: bool = False, fake_tts: bool = False
         while runner.run_once():
             pass
         return
-    preload(tts)
     stop = threading.Event()
     key = settings.supabase_service_role_key.get_secret_value()
     Heartbeat(runner, JobQueue(make_client(settings), settings.worker_id), stop).start()
