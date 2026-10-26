@@ -80,6 +80,19 @@ def test_errors():
         list(splitter.finish())
 
 
+@pytest.mark.parametrize("cut", [-5, 3])
+def test_truncated_known_size_cluster_raises(cut):
+    init, clusters = _stream(known=True)
+    tail = clusters[1][:cut]
+    splitter = WebmSplitter()
+    assert [type(p) for p in splitter.feed(init + clusters[0] + tail)] == [
+        InitSegment,
+        ClusterSegment,
+    ]
+    with pytest.raises(WebmError, match="stream ended inside an element"):
+        list(splitter.finish())
+
+
 def test_real_ffmpeg_live_output_round_trips():
     pcm = (0.3 * np.sin(2 * np.pi * 440 * np.arange(25 * 48_000) / 48_000)).astype("<f4")
     data = subprocess.run(

@@ -1,6 +1,8 @@
 import json
 import subprocess
+import sys
 import threading
+import time
 
 import numpy as np
 import pytest
@@ -63,3 +65,88 @@ def test_broken_ffmpeg_raises_instead_of_hanging():
             encoder.write(sine(1.0))
         encoder.close()
         list(encoder.segments(timeout=30))
+
+
+def _stub(code: str) -> list[str]:
+    return [sys.executable, "-c", code]
+
+
+def _write_in_thread(encoder: StreamEncoder, seconds: float) -> tuple[threading.Thread, list]:
+    errors: list = []
+
+    def run() -> None:
+        try:
+            encoder.write(sine(seconds))
+        except Exception as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    return thread, errors
+
+
+def test_stderr_flood_does_not_block_writes(tmp_path):
+    webm = tmp_path / "ref.webm"
+    encoder_ref = StreamEncoder()
+    encoder_ref.start()
+    encoder_ref.write(sine(12.0))
+    encoder_ref.close()
+    ref = list(encoder_ref.segments(timeout=30))
+    webm.write_bytes(b"".join(s.data for s in ref))
+    # Floods stderr (far beyond a pipe buffer) before reading any stdin, like a chatty ffmpeg.
+    encoder = StreamEncoder()
+    encoder._cmd = _stub(
+        "import sys; sys.stderr.write('x' * 200_000); sys.stderr.flush();"
+        "sys.stdin.buffer.read(); sys.stdout.buffer.write(open(sys.argv[1], 'rb').read());"
+        "sys.stderr.write('TAIL-MARKER'); sys.exit(3)"
+    ) + [str(webm)]
+    encoder.start()
+    writer, errors = _write_in_thread(encoder, 10.0)  # 1.9 MB, far more than a pipe buffer
+    writer.join(20)
+    assert not writer.is_alive() and errors == []
+    encoder.close()
+    got: list = []
+    with pytest.raises(EncoderError, match="exited with 3: x*TAIL-MARKER$") as info:
+        for segment in encoder.segments(timeout=30):
+            got.append(segment)
+    assert [s.data for s in got] == [s.data for s in ref]
+    assert len(str(info.value)) < 600  # bounded stderr tail
+
+
+def test_segments_timeout_raises_encoder_error_and_reaps():
+    encoder = StreamEncoder()
+    encoder._cmd = _stub("import time; time.sleep(60)")
+    encoder.start()
+    with pytest.raises(EncoderError, match="no output for 0.5 s"):
+        list(encoder.segments(timeout=0.5))
+    assert encoder._proc.returncode is not None
+    assert encoder._proc.stdin.closed and encoder._proc.stdout.closed
+    assert encoder._proc.stderr.closed
+
+
+def test_abandoned_segments_iterator_kills_ffmpeg():
+    encoder = StreamEncoder()
+    encoder.start()
+    encoder.write(sine(12.0))
+    segments = encoder.segments(timeout=30)
+    assert isinstance(next(segments), InitSegment)
+    assert encoder._proc.poll() is None
+    segments.close()  # consumer stopped iterating
+    assert encoder._proc.returncode is not None
+    with pytest.raises(EncoderError):
+        encoder.write(sine(1.0))
+
+
+def test_kill_unblocks_a_write_stuck_on_a_full_pipe():
+    encoder = StreamEncoder()
+    encoder._cmd = _stub("import time; time.sleep(60)")  # never reads stdin
+    encoder.start()
+    writer, errors = _write_in_thread(encoder, 10.0)
+    time.sleep(0.5)
+    assert writer.is_alive()  # blocked inside write()
+    encoder.kill()
+    encoder.kill()  # idempotent
+    writer.join(10)
+    assert not writer.is_alive()
+    assert len(errors) == 1 and isinstance(errors[0], EncoderError)
+    assert encoder._proc.returncode is not None

@@ -94,9 +94,9 @@ class WebmSplitter:
         yield from self._parse()
         if self._state != "segment" or self._init_end is None:
             raise WebmError("stream ended before the first Cluster")
+        if self._pos != len(self._buf):
+            raise WebmError("stream ended inside an element")
         if self._cluster_start is not None:
-            if self._pos != len(self._buf):
-                raise WebmError("stream ended inside a Cluster child element")
             yield self._emit_cluster(len(self._buf))
 
     def _emit_cluster(self, end: int) -> ClusterSegment:
