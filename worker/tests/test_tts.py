@@ -83,3 +83,58 @@ def test_provider_reports_missing_vieneu(monkeypatch, tmp_path):
 def test_provider_rejects_unknown_device(tmp_path):
     with pytest.raises(ValueError):
         VieneuProvider(tmp_path, device="tpu")
+
+
+class _BrokenVieneu(_FakeVieneu):
+    error: BaseException | None = RuntimeError("CUDA error: out of memory")
+    rate = 48_000
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        if _BrokenVieneu.error is not None:
+            raise _BrokenVieneu.error
+        self.sample_rate = _BrokenVieneu.rate
+
+
+@pytest.fixture
+def broken_vieneu(monkeypatch, tmp_path):
+    _FakeVieneu.instances = []
+    _BrokenVieneu.error = RuntimeError("CUDA error: out of memory")
+    _BrokenVieneu.rate = 48_000
+    monkeypatch.setitem(sys.modules, "vieneu", types.SimpleNamespace(Vieneu=_BrokenVieneu))
+    monkeypatch.delenv("HF_HUB_CACHE", raising=False)
+    return tmp_path
+
+
+@pytest.mark.parametrize("error", [RuntimeError("CUDA error: out of memory"), OSError("no disk")])
+def test_load_failure_becomes_tts_unavailable_and_is_latched(broken_vieneu, error):
+    _BrokenVieneu.error = error
+    provider = VieneuProvider(broken_vieneu, device="cuda")
+    with pytest.raises(TTSUnavailable) as first:
+        provider.load()
+    assert "CUDA error" not in str(first.value) and "no disk" not in str(first.value)
+    with pytest.raises(TTSUnavailable):
+        provider.synthesize("a", VoiceRef("v", preset="P"), "neutral", 0.0)
+    with pytest.raises(TTSUnavailable):
+        provider.load()
+    assert len(_FakeVieneu.instances) == 1  # the model constructor ran once, not per call
+    assert provider.device == "unavailable"
+
+
+def test_unexpected_sample_rate_is_latched_as_unavailable(broken_vieneu):
+    _BrokenVieneu.error = None
+    _BrokenVieneu.rate = 24_000
+    provider = VieneuProvider(broken_vieneu, device="cpu")
+    for _ in range(2):
+        with pytest.raises(TTSUnavailable):
+            provider.load()
+    assert len(_FakeVieneu.instances) == 1 and provider.device == "unavailable"
+
+
+def test_missing_vieneu_is_latched_too(monkeypatch, tmp_path):
+    monkeypatch.setitem(sys.modules, "vieneu", None)
+    provider = VieneuProvider(tmp_path)
+    for _ in range(2):
+        with pytest.raises(TTSUnavailable, match="not installed"):
+            provider.load()
+    assert provider.device == "unavailable"

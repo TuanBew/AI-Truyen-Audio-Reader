@@ -6,10 +6,16 @@ import time
 import numpy as np
 import pytest
 
-from audiotruyen_worker.audio.render import AttemptSuperseded, ChapterRenderer, SegmentPlan
+from audiotruyen_worker.audio.render import (
+    AttemptSuperseded,
+    ChapterRenderer,
+    SegmentPlan,
+    TTSFailing,
+)
 from audiotruyen_worker.jobs.runner import JobCancelled
 from audiotruyen_worker.tts.base import VoiceRef
 from audiotruyen_worker.tts.fake import FakeTTS
+from audiotruyen_worker.tts.vieneu_provider import TTSUnavailable
 
 NARRATOR = VoiceRef("narrator-id", preset="Đức Trí")
 PREFIX = "audio/n/c/h/1"
@@ -107,16 +113,14 @@ def test_failed_segment_retries_then_falls_back_to_the_narrator():
     assert result.warnings == [{"segment": 0, "code": "tts_fallback_narrator"}]
 
 
-def test_segment_that_always_fails_becomes_silence_with_a_warning():
+def test_isolated_failed_segment_becomes_silence_with_a_warning():
     rec = Recorder()
-    result = renderer(rec, tts=FlakyTTS(fail_times=99)).render(plans(2))
-    assert result.warnings == [
-        {"segment": 0, "code": "tts_failed"},
-        {"segment": 1, "code": "tts_failed"},
-    ]
+    # fail_times=2: both attempts of segment 0 fail, every other segment is fine (1 of 5 = 20%)
+    result = renderer(rec, tts=FlakyTTS(fail_times=2)).render(plans(5))
+    assert result.warnings == [{"segment": 0, "code": "tts_failed"}]
     assert result.timings[0] == pytest.approx((0, 500), abs=1)  # 500 ms of silence, not trimmed
-    assert result.timings[1] == pytest.approx((750, 1250), abs=1)  # after the 250 ms pause
-    assert result.duration_ms == pytest.approx(1500, abs=1)
+    assert result.timings[1][0] == pytest.approx(750, abs=1)  # after the 250 ms pause
+    assert all(e > s for s, e in result.timings.values())
 
 
 class NoisyThenDeadTTS(FakeTTS):
@@ -144,9 +148,11 @@ def test_failed_retakes_never_replace_an_audible_noisy_take():
 
 
 def test_warnings_do_not_leak_between_renders():
-    r = renderer(Recorder(), tts=FlakyTTS(fail_times=99))
-    assert len(r.render(plans(1)).warnings) == 1
-    assert len(r.render(plans(1)).warnings) == 1
+    tts = FlakyTTS(fail_times=2)
+    r = renderer(Recorder(), tts=tts)
+    assert len(r.render(plans(5)).warnings) == 1
+    tts.fail_times = 2
+    assert len(r.render(plans(5)).warnings) == 1
 
 
 class NoisyThenCleanTTS(FakeTTS):
@@ -203,3 +209,100 @@ def test_cancellation_stops_the_render():
 
     with pytest.raises(JobCancelled):
         renderer(Recorder(), check=check).render(plans(10))
+
+
+class UnavailableTTS(FakeTTS):
+    def __init__(self):
+        self.calls = 0
+
+    def synthesize(self, text, voice, emotion, intensity):
+        self.calls += 1
+        raise TTSUnavailable("vieneu failed to load")
+
+
+def test_tts_unavailable_aborts_the_render_and_uploads_no_full_file():
+    rec = Recorder()
+    tts = UnavailableTTS()
+    with pytest.raises(TTSUnavailable):
+        renderer(rec, tts=tts).render(plans(6))
+    assert tts.calls == 1  # never retried through the fallback chain
+    assert PREFIX + "/full.webm" not in [k for k, _, _ in rec.uploads]
+
+
+class SegmentsFailTTS(FakeTTS):
+    """Fails every attempt of the segments whose text starts with 'F'."""
+
+    def synthesize(self, text, voice, emotion, intensity):
+        if text.startswith("F"):
+            raise RuntimeError("cuda oom")
+        return super().synthesize(text, voice, emotion, intensity)
+
+
+def mixed(pattern: str) -> list[SegmentPlan]:
+    return [
+        SegmentPlan(i, ("F" if ch == "F" else "x") * 60, NARRATOR, "neutral", 0.0, False)
+        for i, ch in enumerate(pattern)
+    ]
+
+
+def test_three_consecutive_total_failures_trip_the_breaker_early():
+    rec = Recorder()
+    with pytest.raises(TTSFailing):
+        renderer(rec, tts=SegmentsFailTTS()).render(mixed("FFF" + "o" * 40))
+    assert PREFIX + "/full.webm" not in [k for k, _, _ in rec.uploads]
+
+
+def test_more_than_a_quarter_failed_segments_fail_the_render_at_the_end():
+    rec = Recorder()
+    with pytest.raises(TTSFailing):  # 3 of 10 = 30%, never 3 in a row
+        renderer(rec, tts=SegmentsFailTTS()).render(mixed("FoFoFooooo"))
+    assert PREFIX + "/full.webm" not in [k for k, _, _ in rec.uploads]
+
+
+def test_a_quarter_or_less_failed_segments_still_render():
+    result = renderer(Recorder(), tts=SegmentsFailTTS()).render(mixed("FFoooooo"))
+    assert [w["segment"] for w in result.warnings] == [0, 1]  # 2 of 8 = 25%, in a row but < 3
+
+
+def test_failures_separated_by_audio_do_not_count_as_consecutive():
+    result = renderer(Recorder(), tts=SegmentsFailTTS()).render(mixed("FFoFFoFFo" + "o" * 21))
+    assert len(result.warnings) == 6  # 6 of 30 = 20%
+
+
+class SilentTTS(FakeTTS):
+    """Non-empty takes that are all silence, then (optionally) a real take."""
+
+    def __init__(self, silent_takes: int):
+        self.silent_takes = silent_takes
+        self.calls = 0
+
+    def synthesize(self, text, voice, emotion, intensity):
+        self.calls += 1
+        audio = super().synthesize(text, voice, emotion, intensity)
+        return audio * 0.0 if self.calls <= self.silent_takes else audio
+
+
+def test_a_silent_take_counts_as_failed_and_goes_through_the_retry_chain():
+    tts = SilentTTS(silent_takes=1)
+    result = renderer(Recorder(), tts=tts).render(plans(1))
+    assert tts.calls == 2 and result.warnings == [{"segment": 0, "code": "tts_fallback_retry"}]
+    start, end = result.timings[0]
+    assert end - start > 3000  # the audible retry, not silence
+
+
+def test_segment_whose_every_take_is_silent_becomes_failed_silence():
+    other = VoiceRef("other-id", preset="Thái Sơn")
+    tts = SilentTTS(silent_takes=3)  # voice, retry, narrator: all three attempts of segment 0
+    result = renderer(Recorder(), tts=tts).render(plans(5, voice=other))
+    assert result.warnings == [{"segment": 0, "code": "tts_failed"}]
+    assert result.timings[0] == pytest.approx((0, 500), abs=1)
+
+
+def test_remux_timeout_is_a_clear_error(monkeypatch):
+    def hang(*args, **kwargs):
+        assert kwargs.get("timeout") == 120
+        raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+
+    monkeypatch.setattr(subprocess, "run", hang)
+    with pytest.raises(RuntimeError, match="timed out"):
+        renderer(Recorder()).render(plans(2))

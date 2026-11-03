@@ -12,6 +12,11 @@ NEUTRAL_TEMPERATURE = 0.8
 MAX_TEMPERATURE = 0.95
 
 
+class TTSUnavailable(RuntimeError):
+    """The TTS model cannot be used at all (not installed, failed to load). Never retried per
+    segment; the render aborts and the owner sees a fixed message."""
+
+
 @dataclass(frozen=True)
 class VoiceRef:
     """A voice to speak with: a VieNeu preset (no clone) or a reference clip to clone from."""

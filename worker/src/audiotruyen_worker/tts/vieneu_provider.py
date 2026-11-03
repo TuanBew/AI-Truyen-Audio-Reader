@@ -13,13 +13,11 @@ from pathlib import Path
 
 import numpy as np
 
-from audiotruyen_worker.tts.base import SAMPLE_RATE, VoiceRef, temperature_for
+from audiotruyen_worker.tts.base import SAMPLE_RATE, TTSUnavailable, VoiceRef, temperature_for
+
+__all__ = ["TTSUnavailable", "VieneuProvider"]
 
 log = logging.getLogger(__name__)
-
-
-class TTSUnavailable(RuntimeError):
-    pass
 
 
 def _use_cache(cache_dir: Path) -> None:
@@ -49,33 +47,52 @@ class VieneuProvider:
         self._requested = device
         self._device: str | None = None
         self._tts = None
+        self._failure: TTSUnavailable | None = None  # latched load failure (process lifetime)
         self._lock = threading.Lock()
 
     @property
     def device(self) -> str:
-        return self._device or "loading"
+        if self._device:
+            return self._device
+        return "unavailable" if self._failure is not None else "loading"
 
     def load(self) -> None:
-        """Load the model once (thread-safe). Called in the background at worker start."""
+        """Load the model once (thread-safe). Called in the background at worker start. Any
+        failure becomes TTSUnavailable and is latched: later calls raise it at once without
+        retrying (the owner fixes the cause and restarts the worker)."""
         with self._lock:
             if self._tts is not None:
                 return
-            _use_cache(self._models_dir / "hf")
+            if self._failure is not None:
+                raise self._failure
             try:
-                from vieneu import Vieneu
-            except ImportError as exc:
-                raise TTSUnavailable("vieneu is not installed (uv sync --extra cuda)") from exc
-            device = self._requested
-            if device == "auto":
-                device = "cuda" if _cuda_available() else "cpu"
-            if device == "cuda":
-                tts = Vieneu(device="cuda", backend="pytorch")
-            else:
-                tts = Vieneu(device="cpu", backend="onnx")
-            if tts.sample_rate != SAMPLE_RATE:
-                raise TTSUnavailable(f"unexpected sample rate {tts.sample_rate}")
-            self._tts, self._device = tts, device
-            log.info("VieNeu loaded (device=%s, backend=%s)", device, tts.backend)
+                self._load()
+            except TTSUnavailable as exc:
+                self._failure = exc
+                raise
+            except Exception as exc:  # ImportError, OSError, RuntimeError (CUDA), ...
+                log.exception("VieNeu failed to load")
+                # the message is for logs and never carries the raw error text
+                self._failure = TTSUnavailable(f"VieNeu failed to load ({type(exc).__name__})")
+                raise self._failure from exc
+
+    def _load(self) -> None:
+        _use_cache(self._models_dir / "hf")
+        try:
+            from vieneu import Vieneu
+        except ImportError as exc:
+            raise TTSUnavailable("vieneu is not installed (uv sync --extra cuda)") from exc
+        device = self._requested
+        if device == "auto":
+            device = "cuda" if _cuda_available() else "cpu"
+        if device == "cuda":
+            tts = Vieneu(device="cuda", backend="pytorch")
+        else:
+            tts = Vieneu(device="cpu", backend="onnx")
+        if tts.sample_rate != SAMPLE_RATE:
+            raise TTSUnavailable(f"unexpected sample rate {tts.sample_rate}")
+        self._tts, self._device = tts, device
+        log.info("VieNeu loaded (device=%s, backend=%s)", device, tts.backend)
 
     def synthesize(self, text: str, voice: VoiceRef, emotion: str, intensity: float) -> np.ndarray:
         self.load()

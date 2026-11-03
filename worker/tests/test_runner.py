@@ -258,3 +258,11 @@ def test_audio_failures_map_to_owner_messages():
     assert "uv sync --extra cuda" in message and retryable is False
     message, retryable = describe_failure(EncoderError("boom"))
     assert "ffmpeg" in message and "boom" not in message and retryable is True
+
+
+def test_tts_failing_maps_to_a_retryable_vietnamese_message_without_raw_text():
+    from audiotruyen_worker.audio.render import TTSFailing
+
+    message, retryable = describe_failure(TTSFailing("3 segments in a row, cuda oom secret"))
+    assert message == "Giọng đọc đang lỗi liên tục, chưa tạo được audio. Thử lại sau."
+    assert retryable is True and "secret" not in message

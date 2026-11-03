@@ -16,20 +16,27 @@ from pathlib import Path
 import numpy as np
 
 from audiotruyen_worker.audio.encoder import SAMPLE_RATE, EncoderError, StreamEncoder
-from audiotruyen_worker.audio.post import finish_segment
+from audiotruyen_worker.audio.post import finish_segment, trim
 from audiotruyen_worker.audio.quality import hf_ratio, is_noisy
 from audiotruyen_worker.audio.webm_split import ClusterSegment, InitSegment
-from audiotruyen_worker.tts.base import TTSProvider, VoiceRef
+from audiotruyen_worker.tts.base import TTSProvider, TTSUnavailable, VoiceRef
 
 log = logging.getLogger(__name__)
 
 CONTENT_TYPE = "audio/webm"
 GUARD_RETRIES = 2  # at most 2 re-syntheses per segment; the lowest-ratio take is kept
 FAILED_SEGMENT_MS = 500  # silence for a segment that could not be synthesized at all
+MAX_CONSECUTIVE_FAILURES = 3  # circuit breaker: this many dead segments in a row abort the render
+MAX_FAILED_FRACTION = 0.25  # ... and so does a chapter with more than this share of dead ones
+REMUX_TIMEOUT_S = 120
 
 
 class AttemptSuperseded(Exception):
     """A newer attempt owns this chapter_audio row; this run must stop and upload nothing."""
+
+
+class TTSFailing(RuntimeError):
+    """Too many segments could not be synthesized at all; the chapter must not become ready."""
 
 
 @dataclass(frozen=True)
@@ -54,6 +61,14 @@ class RenderResult:
 
 Uploader = Callable[[str, bytes, str], int]
 Progress = Callable[[str, list[dict]], bool]  # (init_key, chunks) -> still own the attempt?
+
+
+def _audible(audio: np.ndarray) -> bool:
+    """False for an empty take or one that trims to nothing (all silence or sub-threshold)."""
+    if not len(audio):
+        return False
+    clean = np.nan_to_num(np.asarray(audio, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+    return bool(len(trim(clean)))
 
 
 class ChapterRenderer:
@@ -82,7 +97,7 @@ class ChapterRenderer:
 
     def _speak(self, plan: SegmentPlan) -> np.ndarray | None:
         """Retry once, then the voice's neutral form, then the default narrator. None when every
-        attempt failed or came back empty; never raises."""
+        attempt failed or came back empty or silent. TTSUnavailable is never swallowed."""
         attempts: list[tuple[str, VoiceRef]] = [("voice", plan.voice), ("retry", plan.voice)]
         if plan.voice.ref_path and plan.voice.preset:
             attempts.append(("neutral", VoiceRef(plan.voice.voice_id, preset=plan.voice.preset)))
@@ -91,10 +106,13 @@ class ChapterRenderer:
         for step, voice in attempts:
             try:
                 audio = self._tts.synthesize(plan.text, voice, plan.emotion, plan.intensity)
+            except TTSUnavailable:
+                raise  # the model is gone: no per-segment fallback can help
             except Exception as exc:  # a segment never blocks the chapter
                 log.warning("segment %d: TTS failed (%s): %s", plan.i, step, type(exc).__name__)
                 continue
-            if not len(audio):
+            if not _audible(audio):
+                log.warning("segment %d: TTS returned no audible audio (%s)", plan.i, step)
                 continue
             if step != "voice":
                 self._warnings.append({"segment": plan.i, "code": f"tts_fallback_{step}"})
@@ -180,12 +198,17 @@ class ChapterRenderer:
         uploader.start()
         timings: dict[int, tuple[int, int]] = {}
         samples = 0
+        failed = streak = 0
         try:
             for plan in plans:
                 self._check()
                 if stop.is_set():
                     break
                 audio = self._synthesize(plan)
+                streak = streak + 1 if audio is None else 0
+                failed += audio is None
+                if streak >= MAX_CONSECUTIVE_FAILURES:
+                    raise TTSFailing(f"{streak} segments in a row could not be synthesized")
                 if audio is None:  # exactly FAILED_SEGMENT_MS of silence, never trimmed away
                     gap = np.zeros(FAILED_SEGMENT_MS * SAMPLE_RATE // 1000, dtype=np.float32)
                     pause, _ = finish_segment(gap[:0], plan.emotion, plan.paragraph_end)
@@ -202,6 +225,8 @@ class ChapterRenderer:
                     raise
                 samples += len(pcm)
             if not stop.is_set():
+                if failed > MAX_FAILED_FRACTION * len(plans):
+                    raise TTSFailing(f"{failed} of {len(plans)} segments could not be synthesized")
                 encoder.close()
         except BaseException:
             stop.set()
@@ -231,11 +256,15 @@ class ChapterRenderer:
         with tempfile.TemporaryDirectory(prefix="audiotruyen-") as tmp:
             src, dst = Path(tmp) / "concat.webm", Path(tmp) / "full.webm"
             src.write_bytes(live_webm)
-            subprocess.run(
-                [self._ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
-                 "-i", str(src), "-c", "copy", str(dst)],
-                check=True,
-                capture_output=True,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )  # fmt: skip
+            try:
+                subprocess.run(
+                    [self._ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                     "-i", str(src), "-c", "copy", str(dst)],
+                    check=True,
+                    capture_output=True,
+                    timeout=REMUX_TIMEOUT_S,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )  # fmt: skip
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError(f"ffmpeg remux timed out after {REMUX_TIMEOUT_S} s") from exc
             return dst.read_bytes()

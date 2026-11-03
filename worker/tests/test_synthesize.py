@@ -1,5 +1,6 @@
 import pytest
 
+from audiotruyen_worker.audio.render import TTSFailing
 from audiotruyen_worker.audio_store import AudioRow
 from audiotruyen_worker.jobs.handlers import ChapterPreparer
 from audiotruyen_worker.jobs.queue import Job
@@ -23,6 +24,7 @@ from audiotruyen_worker.store import ChapterRow
 from audiotruyen_worker.text.normalize import LexiconRule
 from audiotruyen_worker.tts.base import VoiceRef
 from audiotruyen_worker.tts.fake import FakeTTS
+from audiotruyen_worker.tts.vieneu_provider import TTSUnavailable
 
 USER = "11111111-1111-1111-1111-111111111111"
 NOVEL = "aaaaaaaa-0000-0000-0000-000000000001"
@@ -240,3 +242,29 @@ def test_chapter_without_speakable_text_is_permanent_and_marks_the_row_failed():
     with pytest.raises(PermanentJobError, match=NO_TEXT):
         handler(store=FakeStore(text="…\n—"), audio=audio, tts=tts)(job(), JobContext(job()))
     assert audio.updates == [{"status": "failed"}] and tts.texts == []
+
+
+class UnavailableTTS(FakeTTS):
+    def synthesize(self, text, voice, emotion, intensity):
+        raise TTSUnavailable("vieneu failed to load")
+
+
+class BrokenTTS(FakeTTS):
+    def synthesize(self, text, voice, emotion, intensity):
+        raise RuntimeError("cuda oom")
+
+
+def test_tts_unavailable_fails_the_row_and_never_marks_it_ready():
+    audio = FakeAudioStore()
+    with pytest.raises(TTSUnavailable):
+        handler(audio=audio, tts=UnavailableTTS())(job(), JobContext(job()))
+    assert audio.updates[-1] == {"status": "failed"}
+    assert not any(u.get("status") == "ready" for u in audio.updates)
+
+
+def test_a_tts_that_fails_every_segment_fails_the_row_and_never_marks_it_ready():
+    audio = FakeAudioStore()
+    with pytest.raises(TTSFailing):
+        handler(audio=audio, tts=BrokenTTS())(job(), JobContext(job()))
+    assert audio.updates[-1] == {"status": "failed"}
+    assert not any(u.get("status") == "ready" for u in audio.updates)

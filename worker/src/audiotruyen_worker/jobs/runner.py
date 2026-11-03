@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from audiotruyen_worker.audio.encoder import EncoderError
+from audiotruyen_worker.audio.render import TTSFailing
 from audiotruyen_worker.jobs.queue import Job
 from audiotruyen_worker.sources.base import NovelNotFound, ParserBroken, SourceBlocked, SourceError
 from audiotruyen_worker.storage.guard import UploadBlocked
@@ -65,6 +66,8 @@ def describe_failure(exc: BaseException) -> tuple[str, bool]:
         return str(exc), False
     if isinstance(exc, TTSUnavailable):
         return "Worker chưa cài VieNeu-TTS. Chạy: uv sync --extra cuda (hoặc --extra tts).", False
+    if isinstance(exc, TTSFailing):
+        return "Giọng đọc đang lỗi liên tục, chưa tạo được audio. Thử lại sau.", True
     if isinstance(exc, EncoderError):
         return "Lỗi khi mã hóa audio bằng ffmpeg. Worker sẽ thử lại sau.", True
     if isinstance(exc, NovelNotFound):
