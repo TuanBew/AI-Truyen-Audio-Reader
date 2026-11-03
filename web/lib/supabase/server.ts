@@ -1,4 +1,5 @@
 import { createServerClient } from "@supabase/ssr";
+import { cache } from "react";
 import { cookies } from "next/headers";
 import { publicEnv } from "@/lib/env";
 
@@ -19,3 +20,11 @@ export async function createClient() {
     },
   });
 }
+
+// Verified user id from the session JWT; null when signed out. Cached per request.
+export const getUserId = cache(async (): Promise<string | null> => {
+  const supabase = await createClient();
+  const { data } = await supabase.auth.getClaims();
+  const sub = data?.claims?.sub;
+  return typeof sub === "string" ? sub : null;
+});

@@ -5,6 +5,20 @@ export function isPublicPath(pathname: string): boolean {
   return PUBLIC_PATHS.has(pathname);
 }
 
+export type AuthDecision = "next" | "login" | "home" | "unauthorized";
+
+function isApiPath(pathname: string): boolean {
+  return pathname === "/api" || pathname.startsWith("/api/");
+}
+
+export function authDecision(pathname: string, signedIn: boolean): AuthDecision {
+  if (!signedIn) {
+    if (isPublicPath(pathname)) return "next";
+    return isApiPath(pathname) ? "unauthorized" : "login";
+  }
+  return isPublicPath(pathname) ? "home" : "next";
+}
+
 // URL parsers drop tab/CR/LF and treat "\" as "/", so "/\t/evil" or "/\\evil" would become "//evil".
 function hasControlCharOrBackslash(value: string): boolean {
   for (let i = 0; i < value.length; i++) {
