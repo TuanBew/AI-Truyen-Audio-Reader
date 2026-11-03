@@ -85,6 +85,8 @@ def test_progress_receives_timings_so_far():
     assert len(rec.timings) == len(rec.progress) > 1
     sizes = [len(t) for t in rec.timings]
     assert sizes == sorted(sizes) and sizes[0] >= 1
+    assert sizes[0] < sizes[-1]  # the first snapshot is demonstrably partial ("so far")
+    assert len({id(t) for t in rec.timings}) == len(rec.timings)  # a fresh copy per call
     last = rec.timings[-1]
     assert all(result.timings[i] == span for i, span in last.items())  # subset, equal values
     expected = dict(result.timings)

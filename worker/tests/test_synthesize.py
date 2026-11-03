@@ -17,6 +17,7 @@ from audiotruyen_worker.jobs.synthesize import (
     SUPERSEDED,
     audio_prefix,
     make_synthesize_handler,
+    timed_segments,
 )
 from audiotruyen_worker.speakers.heuristic import HeuristicStrategy
 from audiotruyen_worker.storage.guard import UploadBlocked
@@ -148,11 +149,11 @@ def test_partial_updates_carry_timed_segments():
     lines = (
         f"“Ngươi dám!” Lâm Phong quát {n}. Trời tối dần, gió thổi qua rừng." for n in range(14)
     )
-    text = chr(10).join(lines)
+    text = "\n".join(lines)
     audio = FakeAudioStore()
     handler(store=FakeStore(text), audio=audio)(job(), JobContext(job()))
     partials = [u for u in audio.updates if u["status"] == "partial"]
-    assert partials
+    assert len(partials) > 1
     for update in partials:
         segs = update["segments"]
         indexes = [s["i"] for s in segs]
@@ -161,11 +162,28 @@ def test_partial_updates_carry_timed_segments():
         assert all({"src", "kind", "emotion"} <= s.keys() for s in segs)
         assert all(s["voice_id"] == NARRATOR.voice_id for s in segs)
     sizes = [len(u["segments"]) for u in partials]
-    assert sizes == sorted(sizes)
+    assert sizes == sorted(sizes) and sizes[0] < sizes[-1]
     final = audio.updates[-1]
     assert [s["i"] for s in partials[-1]["segments"]] == [s["i"] for s in final["segments"]][
         : len(partials[-1]["segments"])
     ]
+
+
+def test_timed_segments_sorts_drops_untimed_and_keeps_fields():
+    analysis = [
+        {"i": 2, "src": [10, 20], "kind": "narration", "emotion": "calm"},
+        {"i": 0, "src": [0, 5], "kind": "dialogue", "emotion": "angry"},
+        {"i": 1, "src": [5, 10], "kind": "narration", "emotion": "neutral"},  # not timed yet
+    ]
+    timings = {2: (900, 1800), 0: (0, 700)}
+    assert timed_segments(analysis, timings, "voice-1") == [
+        {"i": 0, "src": [0, 5], "kind": "dialogue", "emotion": "angry",
+         "voice_id": "voice-1", "start_ms": 0, "end_ms": 700},
+        {"i": 2, "src": [10, 20], "kind": "narration", "emotion": "calm",
+         "voice_id": "voice-1", "start_ms": 900, "end_ms": 1800},
+    ]  # fmt: skip
+    assert timed_segments(analysis, {}, "voice-1") == []
+    assert analysis[0]["i"] == 2  # the input is not reordered or mutated
 
 
 def test_outdated_voice_hash_is_skipped():
