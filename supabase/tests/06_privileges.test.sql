@@ -24,7 +24,7 @@ select set_eq(
      where n.nspname = 'public'
        and not exists (select 1 from pg_depend d where d.objid = p.oid and d.deptype = 'e')
        and has_function_privilege('authenticated', p.oid, 'execute')$$,
-  array['current_voice_hash(uuid)'],
+  array['current_voice_hash(uuid)', 'api_rate_limit_hit(text)', 'record_web_vitals(jsonb)'],
   'authenticated executes exactly the web allow-list'
 );
 
