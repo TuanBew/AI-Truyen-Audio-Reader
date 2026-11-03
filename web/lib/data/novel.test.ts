@@ -56,20 +56,21 @@ describe("pageCountFor", () => {
 });
 
 type Row = Record<string, unknown>;
-type Call = { table: string; filters: string[] };
+type Call = { table: string; filters: string[]; selects: string[] };
 
 // Minimal PostgREST stand-in: eq, in, gte, lte, order, maybeSingle, rpc.
 function fakeSupabase(tables: Record<string, Row[]>, rpcResult: { data: unknown; error: unknown }, calls: Call[] = []) {
   return {
     rpc: (name: string, args: unknown) => {
-      calls.push({ table: `rpc:${name}`, filters: [JSON.stringify(args)] });
+      calls.push({ table: `rpc:${name}`, filters: [JSON.stringify(args)], selects: [] });
       return Promise.resolve(rpcResult);
     },
     from(table: string) {
       const filters: ((r: Row) => boolean)[] = [];
       const log: string[] = [];
       let orderBy: [string, boolean][] = [];
-      calls.push({ table, filters: log });
+      const selects: string[] = [];
+      calls.push({ table, filters: log, selects });
       const run = () => {
         let rows = (tables[table] ?? []).filter((r) => filters.every((f) => f(r)));
         for (const [col, asc] of [...orderBy].reverse()) {
@@ -78,7 +79,10 @@ function fakeSupabase(tables: Record<string, Row[]>, rpcResult: { data: unknown;
         return { data: rows, error: null };
       };
       const builder: Record<string, unknown> = {
-        select: () => builder,
+        select(cols?: string) {
+          selects.push(cols ?? "");
+          return builder;
+        },
         eq(col: string, v: unknown) {
           log.push(`eq:${col}=${String(v)}`);
           filters.push((r) => r[col] === v);
@@ -208,6 +212,24 @@ describe("loadTocPage", () => {
     expect(calls.find((c) => c.table === "listened_chapters")?.filters).toEqual(
       expect.arrayContaining([`eq:chapters.novel_id=${NOVEL_ID}`, "gte:chapters.index=201", "lte:chapters.index=300"]),
     );
+  });
+
+  // Without !inner PostgREST only filters the embedded rows and returns every chapter's audio/listened row.
+  it("selects audio and listened rows through chapters!inner so the parent rows are scoped too", async () => {
+    const calls: Call[] = [];
+    await loadTocPage(fakeSupabase(tables, { data: null, error: null }, calls), NOVEL_ID, "v1", 2, 250);
+    for (const table of ["chapter_audio", "listened_chapters"]) {
+      const call = calls.find((c) => c.table === table)!;
+      expect(call.selects.join(" ")).toMatch(/chapters!inner\(/);
+      expect(call.filters).toEqual(
+        expect.arrayContaining([
+          `eq:chapters.novel_id=${NOVEL_ID}`,
+          "gte:chapters.index=101",
+          "lte:chapters.index=200",
+        ]),
+      );
+    }
+    expect(calls.find((c) => c.table === "chapter_audio")!.filters).toContain("eq:voice_hash=v1");
   });
 
   it("returns the last page short and clamps a page past the end", async () => {
