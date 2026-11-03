@@ -34,6 +34,23 @@ def audio_prefix(novel_id: str, chapter_id: str, voice_hash: str, attempt: int) 
     return f"audio/{novel_id}/{chapter_id}/{voice_hash}/{attempt}/"
 
 
+def timed_segments(
+    analysis: list[dict], timings: dict[int, tuple[int, int]], voice_id: str
+) -> list[dict]:
+    """Analysis entries that have a timing, sorted by i, extended with voice and span. The web
+    relies on chapter_audio.segments being sorted by i and holding only timed segments."""
+    return [
+        {
+            **seg,
+            "voice_id": voice_id,
+            "start_ms": timings[seg["i"]][0],
+            "end_ms": timings[seg["i"]][1],
+        }
+        for seg in sorted(analysis, key=lambda seg: seg["i"])
+        if seg["i"] in timings
+    ]
+
+
 def _mark_failed(audio_store: AudioStore, audio: AudioRow) -> None:
     """Best effort: a failure here must never mask the error that is being handled."""
     try:
@@ -82,9 +99,13 @@ def make_synthesize_handler(
             _mark_failed(audio_store, audio)
             raise PermanentJobError(NO_TEXT)
 
-        def progress(init_key: str, chunks: list[dict]) -> bool:
+        def progress(
+            init_key: str | None, chunks: list[dict], timings: dict[int, tuple[int, int]]
+        ) -> bool:
+            segments = timed_segments(chapter.analysis, timings, narrator.voice_id)
             return audio_store.update(
-                audio, {"init_key": init_key, "chunks": chunks, "status": "partial"}
+                audio,
+                {"init_key": init_key, "chunks": chunks, "status": "partial", "segments": segments},
             )
 
         renderer = ChapterRenderer(
@@ -107,13 +128,7 @@ def make_synthesize_handler(
             _mark_failed(audio_store, audio)
             raise
 
-        segments = []
-        for seg in chapter.analysis:
-            if seg["i"] in result.timings:
-                start_ms, end_ms = result.timings[seg["i"]]
-                segments.append(
-                    {**seg, "voice_id": narrator.voice_id, "start_ms": start_ms, "end_ms": end_ms}
-                )
+        segments = timed_segments(chapter.analysis, result.timings, narrator.voice_id)
         final = {
             "status": "ready",
             "provider": tts.name,

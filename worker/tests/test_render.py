@@ -29,6 +29,7 @@ class Recorder:
     def __init__(self, own_until: int | None = None):
         self.uploads: list[tuple[str, bytes, float]] = []
         self.progress: list[list[dict]] = []
+        self.timings: list[dict[int, tuple[int, int]]] = []
         self.own_until = own_until
         self.lock = threading.Lock()
 
@@ -38,9 +39,10 @@ class Recorder:
             self.uploads.append((key, data, time.perf_counter()))
         return len(data)
 
-    def on_progress(self, init_key, chunks):
+    def on_progress(self, init_key, chunks, timings):
         assert init_key == PREFIX + "/init.webm"
         self.progress.append([dict(c) for c in chunks])
+        self.timings.append(timings)
         return self.own_until is None or len(chunks) <= self.own_until
 
 
@@ -75,6 +77,22 @@ def test_render_uploads_init_clusters_and_seekable_full_file(tmp_path):
     )["format"]  # fmt: skip
     assert float(fmt["duration"]) == pytest.approx(result.duration_ms / 1000, abs=0.05)
     assert b"\x1c\x53\xbb\x6b" in full  # Cues: seekable
+
+
+def test_progress_receives_timings_so_far():
+    rec = Recorder()
+    result = renderer(rec).render(plans(12))
+    assert len(rec.timings) == len(rec.progress) > 1
+    sizes = [len(t) for t in rec.timings]
+    assert sizes == sorted(sizes) and sizes[0] >= 1
+    last = rec.timings[-1]
+    assert all(result.timings[i] == span for i, span in last.items())  # subset, equal values
+    expected = dict(result.timings)
+    for snapshot in rec.timings:  # every snapshot is a copy of the renderer's own dict
+        assert snapshot is not result.timings
+        snapshot[999] = (0, 1)
+        snapshot.clear()
+    assert result.timings == expected
 
 
 class SlowTTS(FakeTTS):

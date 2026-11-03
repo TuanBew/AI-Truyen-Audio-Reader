@@ -144,6 +144,30 @@ def test_synthesizes_all_segments_and_writes_the_ready_row():
     }  # fmt: skip
 
 
+def test_partial_updates_carry_timed_segments():
+    lines = (
+        f"“Ngươi dám!” Lâm Phong quát {n}. Trời tối dần, gió thổi qua rừng." for n in range(14)
+    )
+    text = chr(10).join(lines)
+    audio = FakeAudioStore()
+    handler(store=FakeStore(text), audio=audio)(job(), JobContext(job()))
+    partials = [u for u in audio.updates if u["status"] == "partial"]
+    assert partials
+    for update in partials:
+        segs = update["segments"]
+        indexes = [s["i"] for s in segs]
+        assert segs and indexes == sorted(set(indexes))
+        assert all(s["start_ms"] < s["end_ms"] for s in segs)
+        assert all({"src", "kind", "emotion"} <= s.keys() for s in segs)
+        assert all(s["voice_id"] == NARRATOR.voice_id for s in segs)
+    sizes = [len(u["segments"]) for u in partials]
+    assert sizes == sorted(sizes)
+    final = audio.updates[-1]
+    assert [s["i"] for s in partials[-1]["segments"]] == [s["i"] for s in final["segments"]][
+        : len(partials[-1]["segments"])
+    ]
+
+
 def test_outdated_voice_hash_is_skipped():
     with pytest.raises(JobSkipped, match=STALE_SETTINGS):
         handler(audio=FakeAudioStore(voice_hash="other"))(job(), JobContext(job()))
