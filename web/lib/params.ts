@@ -20,3 +20,18 @@ export function parseChapterNumber(s: string | null | undefined, max: number): n
   const n = Number(s);
   return n >= 1 && n <= max ? n : null;
 }
+
+const CHAPTER_INDEX_RE = /^[1-9]\d{0,5}$/;
+const SEGMENT_RE = /^(?:0|[1-9]\d{0,5})$/;
+
+// A reader route chapter index: a plain decimal integer in 1..100000 (no sign, point or leading zeros), else null.
+export function parseChapterIndex(s: string): number | null {
+  if (!CHAPTER_INDEX_RE.test(s)) return null;
+  const n = Number(s);
+  return n <= 100000 ? n : null;
+}
+
+// The reader's ?seg= value: a non-negative integer, else null (the parameter is ignored).
+export function parseSegment(s: string | undefined): number | null {
+  return s !== undefined && SEGMENT_RE.test(s) ? Number(s) : null;
+}

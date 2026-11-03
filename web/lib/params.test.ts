@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseChapterNumber, parsePage, parseUuid } from "./params";
+import { parseChapterIndex, parseChapterNumber, parsePage, parseSegment, parseUuid } from "./params";
 
 describe("parseUuid", () => {
   it("rejects anything that is not a uuid", () => {
@@ -47,5 +47,32 @@ describe("parseChapterNumber", () => {
     expect(parseChapterNumber("1.5", 19)).toBeNull();
     expect(parseChapterNumber(null, 19)).toBeNull();
     expect(parseChapterNumber("5", 0)).toBeNull();
+  });
+});
+
+describe("parseChapterIndex", () => {
+  it("accepts a plain integer in 1..100000", () => {
+    expect(parseChapterIndex("1")).toBe(1);
+    expect(parseChapterIndex("19")).toBe(19);
+    expect(parseChapterIndex("100000")).toBe(100000);
+  });
+
+  it("rejects zero, leading zeros, signs, decimals, text and out-of-range values", () => {
+    for (const bad of ["0", "01", "abc", "1.5", "100001", "-1", "+1", "", " 1", "1 ", "1e3", "0x10", "٣"]) {
+      expect(parseChapterIndex(bad), bad).toBeNull();
+    }
+  });
+});
+
+describe("parseSegment", () => {
+  it("accepts a non-negative integer, including 0", () => {
+    expect(parseSegment("0")).toBe(0);
+    expect(parseSegment("42")).toBe(42);
+  });
+
+  it("ignores anything else", () => {
+    for (const bad of [undefined, "", "-1", "1.5", "abc", "007", "1e3", " 3", "99999999999"]) {
+      expect(parseSegment(bad), String(bad)).toBeNull();
+    }
   });
 });
