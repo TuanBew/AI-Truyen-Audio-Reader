@@ -31,8 +31,19 @@ const voicesSchema = z.object({
   female: field(z.string().min(1).nullable(), null),
 });
 
+// Strategy chain order (spec 5.4). Empty, unknown or duplicate entries fall back to the default
+// order, so a bad document can never disable analysis or send an unknown strategy to the worker.
+const strategySchema = z.enum(["openrouter", "local_llm", "heuristic"]);
+const defaultAnalysisOrder = strategySchema.options.slice();
+
 const analysisSchema = z.object({
-  order: field(z.array(z.string().min(1)), []),
+  order: field(
+    z
+      .array(strategySchema)
+      .min(1)
+      .refine((order) => new Set(order).size === order.length),
+    defaultAnalysisOrder,
+  ),
 });
 
 const workerSchema = z.object({
@@ -42,7 +53,9 @@ const workerSchema = z.object({
 });
 
 // A sub-object that is not an object at all (or missing) becomes its defaults.
-const section = <T extends z.ZodType>(schema: T) => z.preprocess((v) => (v && typeof v === "object" ? v : {}), schema);
+const isPlainRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+
+const section = <T extends z.ZodType>(schema: T) => z.preprocess((v) => (isPlainRecord(v) ? v : {}), schema);
 
 const settingsSchema = z.object({
   appearance: section(appearanceSchema),
@@ -56,7 +69,7 @@ const settingsSchema = z.object({
 export type Settings = z.infer<typeof settingsSchema>;
 
 export function parseSettings(raw: unknown): Settings {
-  return settingsSchema.parse(raw && typeof raw === "object" ? raw : {});
+  return settingsSchema.parse(isPlainRecord(raw) ? raw : {});
 }
 
 export const defaultSettings: Settings = parseSettings({});

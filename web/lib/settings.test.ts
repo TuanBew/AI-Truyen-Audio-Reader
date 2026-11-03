@@ -40,4 +40,32 @@ describe("parseSettings", () => {
     expect(parseSettings({ worker: { prefetchCount: 10 } }).worker.prefetchCount).toBe(10);
     expect(parseSettings({ worker: { prefetchCount: 2.5 } }).worker.prefetchCount).toBe(3);
   });
+
+  it("defaults analysis.order to the spec 5.4 chain", () => {
+    expect(parseSettings({}).analysis.order).toEqual(["openrouter", "local_llm", "heuristic"]);
+  });
+
+  it("keeps a valid analysis.order, including a subset in a new order", () => {
+    expect(parseSettings({ analysis: { order: ["heuristic", "openrouter"] } }).analysis.order).toEqual([
+      "heuristic",
+      "openrouter",
+    ]);
+  });
+
+  it.each([[[]], [["x"]], [["openrouter", "openrouter"]], [["openrouter", "nope"]], ["openrouter"]])(
+    "falls back to the default order for invalid analysis.order %j",
+    (order) => {
+      expect(parseSettings({ analysis: { order } }).analysis.order).toEqual(["openrouter", "local_llm", "heuristic"]);
+    },
+  );
+
+  it("returns the defaults when the whole document is an array", () => {
+    expect(parseSettings([])).toEqual(defaultSettings);
+    expect(parseSettings([1, 2])).toEqual(defaultSettings);
+  });
+
+  it("falls back to defaults when a section is an array", () => {
+    expect(parseSettings({ player: [] })).toEqual(defaultSettings);
+    expect(parseSettings({ worker: [{ prefetchCount: 5 }], analysis: [] })).toEqual(defaultSettings);
+  });
 });
