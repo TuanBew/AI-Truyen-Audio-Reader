@@ -107,10 +107,18 @@ class Store:
         )
         return [Character(r["name"], r["gender"], tuple(r["aliases"] or ())) for r in data]
 
-    def has_analysis(self, chapter_id: str, text_hash: str, strategy: str, version: int) -> bool:
+    def chapter_text(self, chapter_id: str) -> str | None:
+        data = (
+            self._db.table("chapters").select("text").eq("id", chapter_id).limit(1).execute().data
+        )
+        return data[0]["text"] if data else None
+
+    def analysis(
+        self, chapter_id: str, text_hash: str, strategy: str, version: int
+    ) -> list[dict[str, Any]] | None:
         data = (
             self._db.table("chapter_analysis")
-            .select("chapter_id")
+            .select("segments")
             .eq("chapter_id", chapter_id)
             .eq("text_hash", text_hash)
             .eq("strategy", strategy)
@@ -119,7 +127,10 @@ class Store:
             .execute()
             .data
         )
-        return bool(data)
+        return data[0]["segments"] if data else None
+
+    def has_analysis(self, chapter_id: str, text_hash: str, strategy: str, version: int) -> bool:
+        return self.analysis(chapter_id, text_hash, strategy, version) is not None
 
     def save_analysis(
         self,

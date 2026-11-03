@@ -10,8 +10,12 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from audiotruyen_worker.audio.encoder import EncoderError
+from audiotruyen_worker.audio.render import TTSFailing
 from audiotruyen_worker.jobs.queue import Job
 from audiotruyen_worker.sources.base import NovelNotFound, ParserBroken, SourceBlocked, SourceError
+from audiotruyen_worker.storage.guard import UploadBlocked
+from audiotruyen_worker.tts.vieneu_provider import TTSUnavailable
 
 log = logging.getLogger(__name__)
 
@@ -25,6 +29,11 @@ class JobCancelled(Exception):
 
 class PermanentJobError(Exception):
     """A failure that retrying cannot fix. The message is shown to the owner (Vietnamese)."""
+
+
+class JobSkipped(Exception):
+    """The job no longer needs doing (settings changed, a newer attempt took over). It ends as
+    `cancelled` with the Vietnamese message as `result.reason`."""
 
 
 @dataclass
@@ -53,8 +62,14 @@ class Queue(Protocol):
 
 def describe_failure(exc: BaseException) -> tuple[str, bool]:
     """(Vietnamese message for the owner, retryable)."""
-    if isinstance(exc, PermanentJobError):
+    if isinstance(exc, PermanentJobError | UploadBlocked):
         return str(exc), False
+    if isinstance(exc, TTSUnavailable):
+        return "Worker chưa cài VieNeu-TTS. Chạy: uv sync --extra cuda (hoặc --extra tts).", False
+    if isinstance(exc, TTSFailing):
+        return "Giọng đọc đang lỗi liên tục, chưa tạo được audio. Thử lại sau.", True
+    if isinstance(exc, EncoderError):
+        return "Lỗi khi mã hóa audio bằng ffmpeg. Worker sẽ thử lại sau.", True
     if isinstance(exc, NovelNotFound):
         return "Không tìm thấy truyện trên truyenfull (truyện có thể đã bị gỡ).", False
     if isinstance(exc, ParserBroken):
@@ -84,7 +99,7 @@ class Runner:
         handlers: Mapping[str, Handler],
         *,
         version: str,
-        device: str,
+        device: str | Callable[[], str],
         wake: threading.Event | None = None,
         poll_seconds: float = 30.0,
     ) -> None:
@@ -126,6 +141,10 @@ class Runner:
         except JobCancelled:
             log.warning("job %s stopped: lease lost", job.id)
             return  # the job was requeued by requeue_expired_jobs; nothing to write
+        except JobSkipped as exc:
+            log.info("job %s skipped: %s", job.id, exc)
+            self.queue.finish(job.id, "cancelled", {"reason": str(exc)})
+            return
         except KeyboardInterrupt:
             # Ctrl+C: hand the job back now instead of waiting for its lease to expire.
             try:
@@ -155,7 +174,8 @@ class Runner:
         """One heartbeat (from the heartbeat thread, with its own client). Cancels the running
         job when its lease was lost."""
         job_id = self.current_job_id
-        owned = (queue or self.queue).heartbeat(self.version, self.device, job_id)
+        device = self.device() if callable(self.device) else self.device
+        owned = (queue or self.queue).heartbeat(self.version, device, job_id)
         if job_id and not owned:
             log.warning("lease lost for job %s; stopping it", job_id)
             self.cancel_current(job_id)

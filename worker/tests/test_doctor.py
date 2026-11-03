@@ -44,3 +44,9 @@ def test_check_r2_detects_mismatch_and_still_cleans_up():
     assert result.ok is False
     assert "mismatch" in result.detail
     assert storage.objects == {}
+
+
+def test_check_libopus_with_the_real_ffmpeg():
+    from audiotruyen_worker.doctor import check_libopus
+
+    assert check_libopus() == "libopus encoder available"

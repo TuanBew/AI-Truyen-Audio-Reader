@@ -1,17 +1,29 @@
 [project]
 name = "audiotruyen-worker"
-version = "0.2.0"
+version = "0.3.0"
 description = "AudioTruyen v2 worker: scraping, analysis, TTS and uploads"
 requires-python = ">=3.12,<3.13"
 dependencies = [
   "boto3>=1.35",
   "httpx>=0.28",
+  "numpy>=2.0",
   "pydantic>=2.9",
   "pydantic-settings>=2.6",
   "realtime>=2.32",
   "selectolax>=1.0.1",
+  "soundfile>=0.12",
   "supabase>=2.10",
   "vietnormalizer==0.2.3",
+]
+
+[project.optional-dependencies]
+# Local TTS (spec 5.6). Not installed in CI: unit tests use the fake provider.
+tts = ["vieneu==3.8.3"]
+cuda = [
+  "vieneu[cuda]==3.8.3",
+  "torch==2.8.0",
+  "torchaudio==2.8.0",
+  "transformers==4.57.6",
 ]
 
 [project.scripts]
@@ -41,3 +53,12 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu128", extra = "cuda" }]
+torchaudio = [{ index = "pytorch-cu128", extra = "cuda" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true

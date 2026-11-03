@@ -101,13 +101,23 @@ def test_enqueue_job_builds_the_payload():
 
 def test_cli_dispatches_run_and_enqueue(monkeypatch):
     calls = []
-    monkeypatch.setattr(cli, "_run", lambda once: calls.append(("run", once)) or 0)
+    monkeypatch.setattr(cli, "_run", lambda once, fake: calls.append(("run", once, fake)) or 0)
     monkeypatch.setattr(cli, "_enqueue", lambda *a: calls.append(("enqueue", *a)) or 0)
+    monkeypatch.setattr(cli, "_init_voices", lambda email: calls.append(("voices", email)) or 0)
+    monkeypatch.setattr(cli, "_gc", lambda: calls.append(("gc",)) or 0)
     assert cli.main(["run", "--once"]) == 0
+    assert cli.main(["run", "--fake-tts"]) == 0
     assert cli.main(["enqueue", "fetch-novel", "https://truyenfull.live/a/"]) == 0
+    assert cli.main(["enqueue", "synthesize", "c-1", "--priority", "10"]) == 0
+    assert cli.main(["init-voices", "--email", "a@x"]) == 0
+    assert cli.main(["gc"]) == 0
     assert calls == [
-        ("run", True),
+        ("run", True, False),
+        ("run", False, True),
         ("enqueue", "fetch-novel", "https://truyenfull.live/a/", None, 0),
+        ("enqueue", "synthesize", "c-1", None, 10),
+        ("voices", "a@x"),
+        ("gc",),
     ]
 
 
@@ -172,3 +182,72 @@ def test_enqueue_rejects_a_blank_value_before_any_network_call(monkeypatch, caps
     assert cli.main(["enqueue", "search", value]) == 1
     assert "Giá trị không được để trống." in capsys.readouterr().err
     assert calls == []
+
+
+class _AudioClient(_Client):
+    def __init__(self, chapters):
+        super().__init__([])
+        self.chapters = chapters
+
+    def table(self, name):
+        if name != "chapters":
+            return super().table(name)
+        client = self
+
+        class _Q:
+            def select(self, cols):
+                return self
+
+            def eq(self, col, value):
+                client.filters = getattr(client, "filters", []) + [(col, value)]
+                return self
+
+            def execute(self):
+                return type("R", (), {"data": client.chapters})()
+
+        return _Q()
+
+    def rpc(self, name, params):
+        assert name == "current_voice_hash" and params == {"p_novel_id": "n-1"}
+        return type("X", (), {"execute": lambda self: type("R", (), {"data": "vh16"})()})()
+
+
+def test_enqueue_synthesize_uses_the_current_voice_hash():
+    from audiotruyen_worker.admin import enqueue_synthesize
+
+    client = _AudioClient([{"novel_id": "n-1"}])
+    assert enqueue_synthesize(client, "u1", "c-1", 10) == "job-1"
+    assert client.filters == [("id", "c-1"), ("user_id", "u1")]
+    assert client.inserted == [
+        (
+            "jobs",
+            {
+                "user_id": "u1",
+                "type": "synthesize",
+                "payload": {"chapter_id": "c-1", "voice_hash": "vh16"},
+                "priority": 10,
+            },
+        )
+    ]
+    with pytest.raises(LookupError):
+        enqueue_synthesize(_AudioClient([]), "u1", "c-1")
+
+
+def test_enqueue_synthesize_for_an_unknown_chapter_says_chapter_not_account(monkeypatch, capsys):
+    from audiotruyen_worker import admin
+    from audiotruyen_worker.admin import ChapterNotFound
+
+    _patch_enqueue(monkeypatch)
+    monkeypatch.setattr(admin, "enqueue_synthesize", _raiser(ChapterNotFound("no chapter")))
+    assert cli.main(["enqueue", "synthesize", "c-404"]) == 1
+    err = capsys.readouterr().err
+    assert "Không tìm thấy chương này." in err
+    assert "tài khoản" not in err
+
+
+def test_enqueue_synthesize_without_a_single_account_still_asks_for_email(monkeypatch, capsys):
+    _patch_enqueue(monkeypatch, resolve=_raiser(LookupError("expected exactly one account")))
+    assert cli.main(["enqueue", "synthesize", "c-1"]) == 1
+    err = capsys.readouterr().err
+    assert "Không tìm thấy tài khoản. Dùng --email để chọn tài khoản." in err
+    assert "chương" not in err

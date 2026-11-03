@@ -57,3 +57,65 @@ def enqueue_job(client, user_id: str, job_type: str, value: str, priority: int =
         raise ValueError(f"cannot enqueue job type {job_type!r}")
     row = {"user_id": user_id, "type": job_type, "payload": {key: value}, "priority": priority}
     return client.table("jobs").insert(row).execute().data[0]["id"]
+
+
+DEFAULT_VOICES = (  # spec 1 / 5.10: Southern presets chosen by the owner in spike S1
+    ("Đức Trí", "male", "narrator"),
+    ("Thái Sơn", "male", "male"),
+    ("Mỹ Duyên", "female", "female"),
+)
+
+
+_ROLE_FLAGS = {
+    "narrator": "is_default_narrator",
+    "male": "is_default_male",
+    "female": "is_default_female",
+}
+
+
+def init_voices(audio_store, user_id: str) -> list[str]:
+    """Ensure the three default preset voices exist and hold any default role nobody holds yet.
+
+    Non-destructive: an existing voice with one of the names is never modified (even a clone),
+    and no default flag is ever cleared, so a custom narrator chosen by the owner survives.
+    Returns the ids of the three named voices, in DEFAULT_VOICES order."""
+    ids = []
+    for name, gender, role in DEFAULT_VOICES:
+        voice = audio_store.find_voice(user_id, name)
+        if voice is None:
+            voice_id = audio_store.insert_preset_voice(user_id, name, gender)
+            kind = "preset"
+        else:
+            voice_id, kind = voice["id"], voice["kind"]
+        if kind == "preset":
+            audio_store.set_default_if_unheld(user_id, voice_id, _ROLE_FLAGS[role])
+        ids.append(voice_id)
+    return ids
+
+
+class ChapterNotFound(LookupError):
+    """The chapter id does not exist for this owner (distinct from a missing account)."""
+
+
+def enqueue_synthesize(client, user_id: str, chapter_id: str, priority: int = 0) -> str:
+    """Insert a synthesize job for an owned chapter with the novel's current voice_hash."""
+    rows = (
+        client.table("chapters")
+        .select("novel_id")
+        .eq("id", chapter_id)
+        .eq("user_id", user_id)
+        .execute()
+        .data
+    )
+    if not rows:
+        raise ChapterNotFound(f"no chapter {chapter_id} for this owner")
+    voice_hash = (
+        client.rpc("current_voice_hash", {"p_novel_id": rows[0]["novel_id"]}).execute().data
+    )
+    row = {
+        "user_id": user_id,
+        "type": "synthesize",
+        "payload": {"chapter_id": chapter_id, "voice_hash": voice_hash},
+        "priority": priority,
+    }
+    return client.table("jobs").insert(row).execute().data[0]["id"]
