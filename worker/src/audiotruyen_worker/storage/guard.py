@@ -23,7 +23,7 @@ class GuardedStorage:
         if not self.enabled:
             raise UploadBlocked(
                 "Đang tắt upload lên R2 (R2_UPLOADS_ENABLED=false trong worker/.env). "
-                "Bật lại rồi bấm Thử lại."
+                "Bật lại, khởi động lại worker rồi bấm Thử lại."
             )
 
     def put(self, key: str, data: bytes, content_type: str) -> int:
@@ -45,7 +45,8 @@ class GuardedStorage:
             gib = self.max_bytes / 1024**3
             raise UploadBlocked(
                 f"Kho audio trên R2 đã chạm giới hạn {gib:g} GiB. "
-                "Xóa bớt truyện hoặc tăng R2_MAX_BYTES rồi bấm Thử lại."
+                "Chạy uv run worker gc để dọn audio cũ, xóa bớt truyện hoặc tăng R2_MAX_BYTES, "
+                "rồi bấm Thử lại."
             )
         if verdict == "puts_cap":
             raise UploadBlocked(

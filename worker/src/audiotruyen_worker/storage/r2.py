@@ -23,7 +23,10 @@ class R2Storage:
             aws_secret_access_key=settings.r2_secret_access_key.get_secret_value(),
             region_name="auto",
             config=Config(
-                signature_version="s3v4", retries={"max_attempts": 5, "mode": "standard"}
+                signature_version="s3v4",
+                retries={"max_attempts": 5, "mode": "standard"},
+                connect_timeout=10,
+                read_timeout=60,
             ),
         )
         return cls(client, settings.r2_bucket)

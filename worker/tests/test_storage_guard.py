@@ -62,10 +62,17 @@ def test_caps_refuse_before_any_put(verdict, text):
     assert storage.puts == []
 
 
+def test_bytes_cap_message_points_to_gc():
+    g, _, _ = guarded("bytes_cap")
+    with pytest.raises(UploadBlocked, match="worker gc"):
+        g.put("audio/k", b"x", "audio/webm")
+
+
 def test_kill_switch_refuses_without_touching_the_database():
     g, storage, client = guarded(enabled=False)
-    with pytest.raises(UploadBlocked, match="R2_UPLOADS_ENABLED"):
+    with pytest.raises(UploadBlocked, match="R2_UPLOADS_ENABLED") as blocked:
         g.put("audio/k", b"x", "audio/webm")
+    assert "khởi động lại worker" in str(blocked.value)  # the flag is read at startup
     assert client.calls == [] and storage.puts == []
 
 
