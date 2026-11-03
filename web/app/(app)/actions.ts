@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
+import { addNovelError, RETRY_NOT_APPLIED, retryJobError } from "@/lib/data/pending-jobs";
 import { parseTruyenfullNovelUrl } from "@/lib/truyenfull-url";
 import { createClient, getUserId } from "@/lib/supabase/server";
 
@@ -22,17 +23,32 @@ export async function addNovel(_prev: AddNovelState, formData: FormData): Promis
     .insert({ type: "fetch_novel", payload: { url }, priority: 0, user_id: userId });
   if (error) {
     console.error("addNovel: enqueue failed", error.code, error.message);
-    return { error: "Không thêm được vào hàng chờ. Thử lại sau ít phút.", ok: false };
+    return { error: addNovelError(error), ok: false };
   }
   revalidatePath("/");
   return { error: null, ok: true };
 }
 
-// failed -> queued; the jobs_guard_write trigger resets attempts, error and the lease.
-export async function retryJob(jobId: string): Promise<void> {
-  if (!z.uuid().safeParse(jobId).success) return;
+export type RetryState = { error: string | null };
+
+// failed -> queued; the jobs_guard_write trigger resets attempts, error and the lease. Bound with the job id
+// and used through useActionState (extra arguments are ignored).
+export async function retryJob(jobId: string): Promise<RetryState> {
+  if (!z.uuid().safeParse(jobId).success) return { error: RETRY_NOT_APPLIED };
   const supabase = await createClient();
-  const { error } = await supabase.from("jobs").update({ status: "queued" }).eq("id", jobId).eq("status", "failed");
-  if (error) console.error("retryJob: update failed", error.code, error.message);
+  const { data, error } = await supabase
+    .from("jobs")
+    .update({ status: "queued" })
+    .eq("id", jobId)
+    .eq("status", "failed")
+    .select("id");
+  if (error) {
+    console.error("retryJob: update failed", error.code, error.message);
+    return { error: retryJobError(error) };
+  }
+  // No row matched: the job is no longer failed (another tab retried it) or is not the caller's. The list is left
+  // as it is so the message stays next to the button; the user reloads as the message says.
+  if (!data || data.length === 0) return { error: RETRY_NOT_APPLIED };
   revalidatePath("/");
+  return { error: null };
 }

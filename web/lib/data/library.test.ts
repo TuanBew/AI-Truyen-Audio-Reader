@@ -134,19 +134,41 @@ describe("loadLibrary", () => {
     expect(lib.novels[0]).toMatchObject({ id: "b", newChapters: 2, readChapters: 2 });
   });
 
-  it("lists only unfinished fetch_novel jobs, newest first, at most 10", async () => {
-    const jobs: Row[] = Array.from({ length: 12 }, (_, i) => ({
-      id: `j${i}`,
-      type: "fetch_novel",
-      status: "queued",
-      error: null,
+  it("lists only fetch_novel jobs that are queued, running or failed, newest first, at most 10", async () => {
+    const job = (id: string, type: string, status: string, day: number): Row => ({
+      id,
+      type,
+      status,
+      error: status === "failed" ? "lỗi" : null,
       priority: 0,
-      created_at: `2026-03-${String(i + 10).padStart(2, "0")}`,
+      created_at: `2026-03-${String(day).padStart(2, "0")}`,
       url: null,
-    }));
+    });
+    const jobs: Row[] = [
+      job("done", "fetch_novel", "done", 30),
+      job("cancelled", "fetch_novel", "cancelled", 29),
+      job("synth", "synthesize", "queued", 28),
+      job("failed", "fetch_novel", "failed", 20),
+      job("running", "fetch_novel", "running", 19),
+      ...Array.from({ length: 10 }, (_, i) => job(`q${i}`, "fetch_novel", "queued", 1 + i)),
+    ];
     const lib = await loadLibrary(fakeSupabase({ jobs }));
-    expect(lib.pendingJobs).toHaveLength(10);
-    expect(lib.pendingJobs[0].id).toBe("j11");
+    const ids = lib.pendingJobs.map((j) => j.id);
+    expect(ids).not.toContain("done");
+    expect(ids).not.toContain("cancelled");
+    expect(ids).not.toContain("synth");
+    expect(ids.slice(0, 2)).toEqual(["failed", "running"]);
+    expect(ids).toHaveLength(10);
+    expect(ids[2]).toBe("q9");
+  });
+
+  it("keeps a failed job in the list when there are fewer than 10", async () => {
+    const lib = await loadLibrary(
+      fakeSupabase({
+        jobs: [{ id: "f", type: "fetch_novel", status: "failed", error: "x", priority: 0, created_at: "2026-03-01", url: null }],
+      }),
+    );
+    expect(lib.pendingJobs.map((j) => j.id)).toEqual(["f"]);
   });
 
   it("does not fetch chapter rows", async () => {

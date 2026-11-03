@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { authDecision, isPublicPath, safeNextPath } from "./paths";
+import { authDecision, isNextInternalPath, isPublicPath, safeNextPath } from "./paths";
 
 describe("isPublicPath", () => {
   it("allows the login page", () => {
@@ -70,5 +70,22 @@ describe("authDecision", () => {
   });
   it("does not treat lookalike paths as API paths", () => {
     expect(authDecision("/apiary", false)).toBe("login");
+  });
+});
+
+describe("Next.js internals", () => {
+  it("recognises only the /_next/ prefix", () => {
+    expect(isNextInternalPath("/_next/hmr")).toBe(true);
+    expect(isNextInternalPath("/_next/static/chunks/a.js")).toBe(true);
+    expect(isNextInternalPath("/_next")).toBe(false);
+    expect(isNextInternalPath("/_nextfoo")).toBe(false);
+    expect(isNextInternalPath("/api/_next/x")).toBe(false);
+  });
+  it("lets signed-out requests reach /_next/* (HMR socket) but not app or api routes", () => {
+    expect(authDecision("/_next/hmr", false)).toBe("next");
+    expect(authDecision("/_next/hmr", true)).toBe("next");
+    expect(authDecision("/", false)).toBe("login");
+    expect(authDecision("/_nextfoo", false)).toBe("login");
+    expect(authDecision("/api/audio-urls", false)).toBe("unauthorized");
   });
 });

@@ -11,7 +11,14 @@ function isApiPath(pathname: string): boolean {
   return pathname === "/api" || pathname.startsWith("/api/");
 }
 
+// Next.js internals (static chunks, the dev HMR socket). They carry no app data and must never be redirected to
+// /login: a redirected HMR websocket fails. Only the exact "/_next/" prefix; "/_nextfoo" and "/api/*" stay protected.
+export function isNextInternalPath(pathname: string): boolean {
+  return pathname.startsWith("/_next/");
+}
+
 export function authDecision(pathname: string, signedIn: boolean): AuthDecision {
+  if (isNextInternalPath(pathname)) return "next";
   if (!signedIn) {
     if (isPublicPath(pathname)) return "next";
     return isApiPath(pathname) ? "unauthorized" : "login";
