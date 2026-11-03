@@ -1,6 +1,6 @@
 -- M3: read-path indexes, per-user API rate limiter, web vitals.
 begin;
-select plan(44);
+select plan(46);
 
 insert into auth.users (id, instance_id, aud, role, email, raw_app_meta_data, raw_user_meta_data, created_at, updated_at)
 values
@@ -116,6 +116,7 @@ select is((select count(*)::int from public.web_vitals), 0, 'user B sees none');
 select is(public.record_web_vitals('{"name":"LCP"}'::jsonb), 0, 'non-array input stores nothing');
 select is(
   public.record_web_vitals($j$[
+    {"name":"TTFB","value":0,"route":"/read/x/1"},
     {"name":"CLS","value":-1,"route":"/"},
     {"name":"CLS","value":1e7,"route":"/"},
     {"name":"CLS","value":"0.1","route":"/"},
@@ -124,10 +125,17 @@ select is(
     {"name":"CLS","value":0.1,"route":5},
     {"name":"CLS","value":1e400,"route":"/"},
     7,
-    null,
-    {"name":"TTFB","value":0,"route":"/read/x/1"}
+    null
   ]$j$::jsonb),
   1, 'malformed samples are filtered out without failing the batch'
+);
+select is(
+  public.record_web_vitals($j$[{"name":"CLS","value":-1e-400,"route":"/"},{"name":"CLS","value":1e-400,"route":"/"},{"name":"CLS","value":-0,"route":"/"},{"name":"CLS","value":0,"route":"/"}]$j$::jsonb),
+  3, 'numeric underflow edges do not raise: tiny positives and zeros are stored, tiny negatives skipped'
+);
+select is(
+  (select count(*)::int from public.web_vitals where name = 'CLS' and value = 0),
+  3, 'tiny positives and negative zero are stored as 0'
 );
 select is(
   (select count(*)::int from public.web_vitals where rating is null and name = 'TTFB'),
@@ -138,10 +146,10 @@ select is(
   10, 'at most 10 samples are stored per call'
 );
 
--- The vitals bucket is exhausted after 30 calls per window (B has made 3).
+-- The vitals bucket is exhausted after 30 calls per window (B has made 4).
 select is(
-  (select sum(public.record_web_vitals('[{"name":"INP","value":50,"route":"/"}]'::jsonb))::int from generate_series(1, 27)),
-  27, 'calls up to the limit store their samples'
+  (select sum(public.record_web_vitals('[{"name":"INP","value":50,"route":"/"}]'::jsonb))::int from generate_series(1, 26)),
+  26, 'calls up to the limit store their samples'
 );
 select is(public.record_web_vitals('[{"name":"INP","value":50,"route":"/"}]'::jsonb), 0, 'the 31st call in a window stores nothing');
 select is(public.api_rate_limit_hit('audio_urls'), true, 'the vitals bucket is independent of audio_urls');

@@ -111,11 +111,12 @@ begin
            case when jsonb_typeof(p.e) = 'object' and jsonb_typeof(p.e -> 'name') = 'string'
                 then p.e ->> 'name' end as name,
            -- Nested CASEs guarantee evaluation order: only JSON numbers are cast to numeric, and
-           -- only numerics inside the column range reach double precision.
+           -- only numerics inside the column range reach double precision. Rounding to 12
+           -- decimals keeps tiny positives (1e-400) from underflowing the cast; they are stored as 0.
            case when jsonb_typeof(p.e) = 'object' then
              case when jsonb_typeof(p.e -> 'value') = 'number' then
                case when (p.e ->> 'value')::numeric >= 0 and (p.e ->> 'value')::numeric < 1e7
-                    then (p.e ->> 'value')::numeric::double precision end
+                    then round((p.e ->> 'value')::numeric, 12)::double precision end
              end
            end as value,
            case when jsonb_typeof(p.e) = 'object' and jsonb_typeof(p.e -> 'rating') = 'string'
