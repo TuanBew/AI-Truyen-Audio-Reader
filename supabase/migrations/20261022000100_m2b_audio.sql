@@ -44,7 +44,8 @@ revoke all on public.r2_monthly_puts from anon, authenticated;
 
 -- Reserve one upload: checks both caps and records the object and the PUT atomically, before the
 -- PUT is sent (a failed PUT is counted, which errs on the safe side). Returns 'ok', 'bytes_cap'
--- or 'puts_cap'. Re-reserving a live key (a retried PUT) counts the PUT but not the bytes again.
+-- or 'puts_cap'. Re-reserving a live key (a retried PUT) counts the PUT but not the bytes again;
+-- re-reserving it with a different size raises (the ledger bytes never change).
 create function public.r2_reserve_upload(p_key text, p_bytes bigint, p_max_bytes bigint, p_max_puts bigint)
 returns text
 language plpgsql
@@ -62,6 +63,10 @@ begin
   is_new := not found;
   if not is_new and existing.deleted_at is not null then
     raise exception 'r2 key % was deleted and must not be reused', p_key using errcode = '23505';
+  end if;
+  if not is_new and existing.bytes <> p_bytes then
+    raise exception 'r2 key % is already reserved with % bytes, not %', p_key, existing.bytes, p_bytes
+      using errcode = '22023';
   end if;
   select coalesce(m.puts, 0) into puts from public.r2_monthly_puts m where m.month = this_month;
   if coalesce(puts, 0) + 1 > p_max_puts then
@@ -195,6 +200,9 @@ begin
     from public.chapter_audio a
    where a.chapter_id = p_chapter_id and a.voice_hash = p_voice_hash
      for update;
+  if not found then
+    raise exception 'chapter_audio for chapter % vanished', p_chapter_id using errcode = 'no_data_found';
+  end if;
 
   if r.status <> 'ready' or r.text_hash is distinct from current_hash then
     update public.chapter_audio a
@@ -239,7 +247,7 @@ begin
     'male=' || coalesce((select v.id::text from public.voices v where v.user_id = owner and v.is_default_male), ''),
     'female=' || coalesce((select v.id::text from public.voices v where v.user_id = owner and v.is_default_female), ''),
     'cast=' || coalesce((
-      select string_agg(c.name || '=' || c.voice_id::text, ',' order by c.name)
+      select string_agg(c.name || '=' || c.voice_id::text, ',' order by c.name collate "C")
         from public.characters c where c.novel_id = p_novel_id and c.voice_id is not null), ''),
     'lexicon=' || coalesce((
       select string_agg(

@@ -1,5 +1,5 @@
 begin;
-select plan(39);
+select plan(40);
 
 insert into auth.users (id, instance_id, aud, role, email, raw_app_meta_data, raw_user_meta_data, created_at, updated_at)
 values
@@ -35,6 +35,7 @@ select is((select count(*)::int from public.r2_objects where key = 'audio/n/c/h/
 select is(public.r2_reserve_upload('audio/n/c/h/1/seg-0000.webm', 600, (select live_bytes from base) + 1000, (select month_puts from base) + 3), 'ok', 'retrying a live key is allowed');
 select is((select live_bytes from public.r2_usage()), (select live_bytes from base) + 600, 'a retried key is not counted twice');
 select is((select month_puts from public.r2_usage()), (select month_puts from base) + 2, 'every reservation counts a PUT');
+select throws_ok($$select public.r2_reserve_upload('audio/n/c/h/1/seg-0000.webm', 601, 1000000000000, 1000000000)$$, '22023', null, 'a live key cannot be re-reserved with different bytes');
 select is(public.r2_reserve_upload('audio/n/c/h/1/seg-0002.webm', 1, (select live_bytes from base) + 1000, (select month_puts from base) + 3), 'ok', 'third PUT ok');
 select is(public.r2_reserve_upload('audio/n/c/h/1/seg-0003.webm', 1, (select live_bytes from base) + 1000, (select month_puts from base) + 3), 'puts_cap', 'over the PUT cap is refused');
 select throws_ok($$select public.r2_reserve_upload('audio/x/y/h/1/init.webm', 10, 1000, 100)$$, '23505', null, 'a deleted key is never reused');
