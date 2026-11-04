@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
-import { TEXT_POLL_START_MS, fetchFailedText, requestSafely } from "@/lib/data/chapter";
+import { TEXT_POLL_START_MS, fetchFailedText, requestSafely } from "@/lib/reader/shared";
 import { nextPollDelay } from "@/lib/data/pending-jobs";
 import type { JobRow } from "@/lib/types";
 import { requestChapterText } from "./actions";

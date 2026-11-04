@@ -1,7 +1,7 @@
 import type { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
 import { generationState, type GenState } from "@/lib/audio/generation";
 import type { AudioResult } from "@/lib/data/audio";
-import type { MsePlayerEngine } from "@/lib/player/engine"; // type only: the engine is loaded with import() on first play
+import type { EngineEvents } from "@/lib/player/engine"; // type only: the engine is loaded with import() on first play
 import type { AudioManifest, AudioSnapshot, TimedSegment } from "@/lib/types";
 import { needsManifest, playableAudio } from "./snapshot";
 import { readPersisted, stepRate, type PlayerStore } from "./store";
@@ -20,6 +20,25 @@ export type PlayerActions = {
   prefetchAfter(novelId: string, chapterIndex: number): Promise<unknown>;
 };
 
+// What the controller needs from an engine (MsePlayerEngine satisfies it).
+export type EngineLike = {
+  readonly attempt: number | null;
+  load(manifest: AudioManifest): void;
+  update(manifest: AudioManifest): void;
+  destroy(): void;
+};
+
+// Everything that touches the network or a heavy module, so tests can stand in for it.
+export type ControllerDeps = {
+  fetchManifest?: (audioId: string) => Promise<AudioManifest>; // throws ManifestError
+  createEngine?: (
+    audio: HTMLAudioElement,
+    events: EngineEvents,
+    refreshManifest: () => Promise<AudioManifest>,
+  ) => Promise<EngineLike>;
+  loadClient?: () => Promise<SupabaseClient>;
+};
+
 export type ControllerOptions = {
   chapterId: string;
   novelId: string;
@@ -29,12 +48,15 @@ export type ControllerOptions = {
   store: PlayerStore;
   actions: PlayerActions;
   now?: () => number;
+  deps?: ControllerDeps;
 };
 
 export const SNAPSHOT_DEBOUNCE_MS = 500;
 export const MANIFEST_MIN_GAP_MS = 2000; // while partial
 export const RATE_LIMIT_BACKOFF_MS = 30_000;
-const MANIFEST_RETRY_MS = 5000; // after a failed refresh while something is already playing
+const MANIFEST_RETRY_BASE_MS = 5000; // after a failed refresh while something is already playing: 5, 10, 20, 40 s
+const MANIFEST_RETRY_MAX_MS = 60_000;
+const MANIFEST_MAX_FAILURES = 5;
 const POLL_FALLBACK_MS = 5000;
 const CLOCK_TICK_MS = 15_000;
 const SCROLL_ANCHOR = 0.3; // the current segment sits in the upper third
@@ -45,13 +67,37 @@ export const TEXT_MSE = "Trình duyệt không phát được âm thanh này. B�
 export const TEXT_NETWORK = "Không tải được âm thanh. Kiểm tra mạng rồi bấm Thử lại.";
 export const TEXT_NO_MSE_PARTIAL = "Trình duyệt này chưa phát được chương đang tạo dở. Đợi tạo xong rồi nghe.";
 export const TEXT_RATE_LIMITED = "Tải âm thanh quá nhanh. Sẽ tự thử lại sau 30 giây.";
-const TEXT_AUTOPLAY = "Trình duyệt chặn tự phát. Bấm phát để nghe.";
+export const TEXT_SESSION_ENDED = "Phiên đăng nhập đã hết. Tải lại trang để đăng nhập.";
+export const TEXT_RELOAD_PAGE = "Không tải được âm thanh. Tải lại trang rồi thử lại.";
+export const TEXT_AUTOPLAY = "Trình duyệt chặn tự phát. Bấm phát để nghe.";
 const TEXT_ENSURE_FAILED = "Không yêu cầu được tạo âm thanh. Thử lại sau ít phút.";
 
-class ManifestError extends Error {
+export class ManifestError extends Error {
   constructor(readonly status: number) {
     super(`manifest HTTP ${status}`);
   }
+}
+
+async function httpManifest(audioId: string): Promise<AudioManifest> {
+  const res = await fetch(`/api/audio/${audioId}/urls`, { headers: { Accept: "application/json" } });
+  if (!res.ok) throw new ManifestError(res.status);
+  const body: unknown = await res.json().catch(() => null);
+  if (!isManifest(body)) throw new ManifestError(502);
+  return body;
+}
+
+async function defaultCreateEngine(
+  audio: HTMLAudioElement,
+  events: EngineEvents,
+  refreshManifest: () => Promise<AudioManifest>,
+): Promise<EngineLike> {
+  const { MsePlayerEngine } = await import("@/lib/player/engine");
+  return new MsePlayerEngine(audio, events, { refreshManifest });
+}
+
+async function defaultLoadClient(): Promise<SupabaseClient> {
+  const { getBrowserClient } = await import("@/lib/supabase/browser");
+  return getBrowserClient() as unknown as SupabaseClient;
 }
 
 function isManifest(value: unknown): value is AudioManifest {
@@ -84,6 +130,7 @@ export class PlayerController {
   private readonly novelId: string;
   private readonly chapterIndex: number;
   private readonly now: () => number;
+  private readonly deps: Required<ControllerDeps>;
   private readonly article: HTMLElement | null;
   private readonly cleanups: (() => void)[] = [];
 
@@ -93,14 +140,15 @@ export class PlayerController {
   private wantPlay = false;
   private sourceReady = false; // the element has a source (engine loaded, or the full file)
   private plain = false; // no MediaSource: playing the full file directly
+  private unlocked = false;
   private softError = false; // store.error is informational (rate limit) and clears by itself
 
   private snapshot: AudioSnapshot;
   private gen: GenState;
   private timed: TimedSegment[];
   private manifest: AudioManifest | null = null;
-  private engine: MsePlayerEngine | null = null;
-  private enginePromise: Promise<MsePlayerEngine> | null = null;
+  private engine: EngineLike | null = null;
+  private enginePromise: Promise<EngineLike> | null = null;
 
   private spans = new Map<number, HTMLElement>();
   private segOrder: number[] = [];
@@ -117,6 +165,8 @@ export class PlayerController {
   private mLastAt = Number.NEGATIVE_INFINITY;
   private mBlockedUntil = 0;
   private mTimer: ReturnType<typeof setTimeout> | null = null;
+  private mFailures = 0;
+  private mGaveUp = false;
 
   // snapshot intake
   private sTimer: ReturnType<typeof setTimeout> | null = null;
@@ -128,6 +178,7 @@ export class PlayerController {
   private channelClient: SupabaseClient | null = null;
   private channelKey: string | null = null;
   private channelToken = 0;
+  private channelHealthy = false;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private clockTimer: ReturnType<typeof setInterval> | null = null;
   private genKey = "";
@@ -139,6 +190,11 @@ export class PlayerController {
     this.novelId = opts.novelId;
     this.chapterIndex = opts.chapterIndex;
     this.now = opts.now ?? Date.now;
+    this.deps = {
+      fetchManifest: opts.deps?.fetchManifest ?? httpManifest,
+      createEngine: opts.deps?.createEngine ?? defaultCreateEngine,
+      loadClient: opts.deps?.loadClient ?? defaultLoadClient,
+    };
     this.snapshot = opts.snapshot;
     this.gen = this.store.getState().gen;
     this.timed = sortedTimings(opts.snapshot);
@@ -164,10 +220,14 @@ export class PlayerController {
 
   play(fromSeg?: number): void {
     if (this.destroyed) return;
+    this.unlockElement(); // synchronously, inside the user's gesture
     this.wantPlay = true;
     const cur = this.store.getState();
     // loading: sound has not started yet. Seeking while already playing does not fire "playing" again.
-    this.store.setState({ loading: !cur.playing, error: this.softError ? cur.error : null });
+    // An explicit play clears a stale autoplay error; a rate-limit notice stays while it is true.
+    const keep = this.softError && cur.error !== TEXT_AUTOPLAY;
+    if (!keep) this.softError = false;
+    this.store.setState({ loading: !cur.playing, error: keep ? cur.error : null });
     if (!this.started) {
       this.started = true;
       this.store.setState({ started: true, error: null, canRetry: false });
@@ -181,6 +241,21 @@ export class PlayerController {
       return;
     }
     this.kick();
+  }
+
+  // Safari and iOS only let an element play later (after a server action, an import and a fetch) when it was started
+  // inside a gesture. Starting the empty element here unlocks it; the expected rejection (no source yet) is ignored,
+  // and the pause it causes must not read as the user pausing.
+  private unlockElement(): void {
+    if (this.unlocked || this.sourceReady) return;
+    this.unlocked = true;
+    this.reloadingUntil = this.now() + 1000;
+    try {
+      this.audio.play().catch(() => {});
+      this.audio.pause();
+    } catch {
+      // not unlockable: the first real play() may be rejected and reports TEXT_AUTOPLAY
+    }
   }
 
   pause(): void {
@@ -263,6 +338,8 @@ export class PlayerController {
     const g = this.gen;
     const jobId = g.kind === "failed" ? g.jobId : g.kind === "partial" ? (g.jobError?.jobId ?? null) : null;
     this.softError = false;
+    this.mGaveUp = false;
+    this.mFailures = 0;
     this.store.setState({ error: null, canRetry: false });
     if (jobId !== null) {
       void this.runAction(this.actions.retrySynthesis(jobId));
@@ -371,12 +448,6 @@ export class PlayerController {
     const seg = this.target;
     if (seg === null) return;
     const ms = startOfSegment(this.timed, seg);
-    if (ms === 0) {
-      // The very start: nothing to seek to, only to play.
-      this.clearTarget();
-      this.kickIfWanted();
-      return;
-    }
     if (ms === null) {
       // Timings are still to come: the first play has not heard back from the server yet, or a job is in flight.
       if ((!this.bootstrapped || isGenerating(this.snapshot)) && this.gen.kind !== "failed") {
@@ -388,7 +459,14 @@ export class PlayerController {
       this.kickIfWanted();
       return;
     }
-    if (!this.sourceReady || ms >= this.store.getState().bufferedEndMs) {
+    if (ms === 0 && !this.sourceReady) {
+      // The very start and nothing loaded yet: there is no position to move, only to play once the source is ready.
+      this.clearTarget();
+      this.kickIfWanted();
+      return;
+    }
+    // A start of 0 needs no buffered audio past it to land there (the segment-0 seek mid-chapter must still move).
+    if (!this.sourceReady || (ms > 0 && ms >= this.store.getState().bufferedEndMs)) {
       this.setPending(seg);
       return;
     }
@@ -436,14 +514,15 @@ export class PlayerController {
     }
 
     void this.syncChannel();
-    if (needsManifest(prev, next) || (!this.sourceReady && playableAudio(next) !== null && !this.store.getState().error)) {
+    if (needsManifest(prev, next) || (!this.sourceReady && !this.mFlight && playableAudio(next) !== null && !this.store.getState().error)) {
       this.requestManifest();
     }
     this.resolveTarget();
   }
 
   private clearSoftError(): void {
-    if (!this.softError) return;
+    // The autoplay notice only goes away when the user plays (see play() and the "playing" handler), never by itself.
+    if (!this.softError || this.store.getState().error === TEXT_AUTOPLAY) return;
     this.softError = false;
     this.store.setState({ error: null });
   }
@@ -467,9 +546,15 @@ export class PlayerController {
     this.sFlight = true;
     try {
       const res = await this.actions.readAudioSnapshot(this.chapterId);
-      if (!this.destroyed && res.snapshot) this.applySnapshot(res.snapshot);
+      if (this.destroyed) return;
+      if (res.snapshot) {
+        this.applySnapshot(res.snapshot);
+        if (this.channelHealthy) this.stopPoll(); // a read worked and events flow: the poll is not needed
+      } else {
+        this.readFailed();
+      }
     } catch {
-      // The next event or the fallback poll tries again.
+      if (!this.destroyed) this.readFailed();
     } finally {
       this.sFlight = false;
       if (this.sDirty) {
@@ -477,6 +562,13 @@ export class PlayerController {
         this.requestSnapshot();
       }
     }
+  }
+
+  // A failed read must not leave the banner stale (the "ready" event may be the one that failed, and no other event
+  // may follow): while a job is in flight the same 5 s poll as for a dead channel takes over until a read succeeds
+  // with a healthy channel, or the generation ends.
+  private readFailed(): void {
+    if (isGenerating(this.snapshot)) this.startPoll();
   }
 
   // One channel with three bindings while a job is in flight: chapter_audio of this chapter, the job row (rebound by
@@ -493,9 +585,8 @@ export class PlayerController {
     this.channelKey = key;
     const token = ++this.channelToken;
     try {
-      const { getBrowserClient } = await import("@/lib/supabase/browser");
+      const client = await this.deps.loadClient();
       if (this.destroyed || token !== this.channelToken) return;
-      const client = getBrowserClient() as unknown as SupabaseClient;
       // The first join must carry the user's token: with the anon key the server rejects the jobs filter ("invalid
       // column for filter") and delivers nothing, because RLS hides every row from anon. The client only picks the
       // session up after the join otherwise.
@@ -517,12 +608,16 @@ export class PlayerController {
       // The join can be acknowledged and still fail afterwards (bad filter, revoked RLS): that arrives as a system
       // message with status "error", not as a subscribe status. Treat it like a dropped channel.
       ch = ch.on("system", {}, (payload: { status?: string }) => {
-        if (token === this.channelToken && payload.status === "error") this.startPoll();
+        if (token === this.channelToken && payload.status === "error") {
+          this.channelHealthy = false;
+          this.startPoll();
+        }
       });
       this.channel = ch;
       this.channelClient = client;
       ch.subscribe((status) => {
         if (token !== this.channelToken || this.destroyed) return;
+        this.channelHealthy = status === "SUBSCRIBED";
         if (status === "SUBSCRIBED") {
           this.stopPoll();
           this.requestSnapshot(); // catch up on whatever happened before the subscription was live
@@ -551,6 +646,7 @@ export class PlayerController {
   private closeChannel(): void {
     this.channelToken++;
     this.channelKey = null;
+    this.channelHealthy = false;
     this.stopPoll();
     const { channel, channelClient } = this;
     this.channel = null;
@@ -575,9 +671,9 @@ export class PlayerController {
 
   // ---- engine and signed URLs ---------------------------------------------------------------------------------
 
-  private ensureEngine(): Promise<MsePlayerEngine> {
-    this.enginePromise ??= import("@/lib/player/engine").then(({ MsePlayerEngine }) => {
-      const engine = new MsePlayerEngine(
+  private ensureEngine(): Promise<EngineLike> {
+    this.enginePromise ??= this.deps
+      .createEngine(
         this.audio,
         {
           onBufferedEndMs: (ms) => {
@@ -592,12 +688,13 @@ export class PlayerController {
             this.resolveTarget();
           },
         },
-        { refreshManifest: () => this.fetchManifest() },
-      );
-      if (this.destroyed) engine.destroy();
-      else this.engine = engine;
-      return engine;
-    });
+        () => this.fetchManifest(),
+      )
+      .then((engine) => {
+        if (this.destroyed) engine.destroy();
+        else this.engine = engine;
+        return engine;
+      });
     return this.enginePromise;
   }
 
@@ -614,12 +711,12 @@ export class PlayerController {
     const audio = playableAudio(this.snapshot);
     if (!audio) throw new ManifestError(404);
     this.mLastAt = this.now();
-    const res = await fetch(`/api/audio/${audio.id}/urls`, { headers: { Accept: "application/json" } });
-    if (res.status === 429) this.mBlockedUntil = this.now() + RATE_LIMIT_BACKOFF_MS;
-    if (!res.ok) throw new ManifestError(res.status);
-    const body: unknown = await res.json().catch(() => null);
-    if (!isManifest(body)) throw new ManifestError(502);
-    return body;
+    try {
+      return await this.deps.fetchManifest(audio.id);
+    } catch (err) {
+      if (err instanceof ManifestError && err.status === 429) this.mBlockedUntil = this.now() + RATE_LIMIT_BACKOFF_MS;
+      throw err;
+    }
   }
 
   // The route is rate limited and shares its bucket with the engine's own refresh, so it is never polled: callers
@@ -628,6 +725,7 @@ export class PlayerController {
   private requestManifest(opts: { force?: boolean; reload?: boolean } = {}): void {
     if (this.destroyed) return;
     if (opts.reload) this.mReload = true;
+    if (this.mGaveUp && !opts.force) return;
     if (this.mFlight) {
       this.mWanted = true;
       return;
@@ -660,27 +758,12 @@ export class PlayerController {
       const [manifest, engine] = await Promise.all([this.fetchManifest(), this.ensureEngineIfMse()]);
       if (this.destroyed) return;
       this.mBlockedUntil = 0;
+      this.mFailures = 0;
       this.clearSoftError();
       this.applyManifest(manifest, engine);
     } catch (err) {
       if (this.destroyed) return;
-      const limited = err instanceof ManifestError && err.status === 429;
-      if (!this.sourceReady) {
-        // Nothing to play yet: say so. A rate limit heals itself; anything else needs the user.
-        if (!limited) this.wantPlay = false;
-        this.softError = limited;
-        this.store.setState({
-          loading: this.wantPlay,
-          error: limited ? TEXT_RATE_LIMITED : TEXT_NETWORK,
-          canRetry: !limited,
-        });
-      } else if (!limited) {
-        this.mBlockedUntil = this.now() + MANIFEST_RETRY_MS; // keep playing what is buffered
-      }
-      if (limited || this.sourceReady) {
-        this.mWanted = true;
-        this.armManifestTimer(Math.max(this.mBlockedUntil - this.now(), 0));
-      }
+      this.onManifestError(err instanceof ManifestError ? err.status : 0);
     } finally {
       this.mFlight = false;
       if (this.mWanted && !this.mTimer && !this.destroyed) {
@@ -690,11 +773,68 @@ export class PlayerController {
     }
   }
 
-  private ensureEngineIfMse(): Promise<MsePlayerEngine | null> {
+  // Rate limit: wait it out and keep playing. 401/403/404 never heal by retrying. Anything else backs off 5, 10, 20, 40 s
+  // and gives up after MANIFEST_MAX_FAILURES in a row (a success resets the count). Nothing is retried once a ready row
+  // is fully appended: there is nothing left to fetch.
+  private onManifestError(status: number): void {
+    if (status === 429) {
+      if (!this.sourceReady) {
+        this.softError = true;
+        this.store.setState({ loading: this.wantPlay, error: TEXT_RATE_LIMITED, canRetry: false });
+      }
+      this.scheduleManifestRetry(Math.max(this.mBlockedUntil - this.now(), 0));
+      return;
+    }
+    if (status === 401 || status === 403 || status === 404) {
+      this.giveUpManifest(status === 401 ? TEXT_SESSION_ENDED : TEXT_RELOAD_PAGE);
+      return;
+    }
+    if (!this.sourceReady) {
+      // Nothing to play yet: the user decides (Thử lại).
+      this.wantPlay = false;
+      this.softError = false;
+      this.store.setState({ loading: false, error: TEXT_NETWORK, canRetry: true });
+      return;
+    }
+    if (++this.mFailures >= MANIFEST_MAX_FAILURES) {
+      this.giveUpManifest(TEXT_RELOAD_PAGE);
+      return;
+    }
+    const delay = Math.min(MANIFEST_RETRY_BASE_MS * 2 ** (this.mFailures - 1), MANIFEST_RETRY_MAX_MS);
+    this.mBlockedUntil = this.now() + delay;
+    this.scheduleManifestRetry(delay);
+  }
+
+  private scheduleManifestRetry(wait: number): void {
+    if (this.fullyBuffered()) return;
+    this.mWanted = true;
+    this.armManifestTimer(wait);
+  }
+
+  private giveUpManifest(text: string): void {
+    this.mGaveUp = true;
+    this.mWanted = false;
+    if (this.mTimer) clearTimeout(this.mTimer);
+    this.mTimer = null;
+    if (!this.sourceReady) this.wantPlay = false;
+    this.softError = false;
+    this.clearTarget();
+    this.store.setState({ loading: false, error: text, canRetry: false });
+  }
+
+  // A ready row whose every chunk is appended (buffered end is about duration + 21 ms).
+  private fullyBuffered(): boolean {
+    const m = this.manifest;
+    if (m === null || m.status !== "ready" || m.durationMs === null) return false;
+    if (playableAudio(this.snapshot)?.attempt !== m.attempt) return false; // a regenerated row still needs its URLs
+    return this.store.getState().bufferedEndMs >= m.durationMs - 50;
+  }
+
+  private ensureEngineIfMse(): Promise<EngineLike | null> {
     return typeof window.MediaSource === "undefined" ? Promise.resolve(null) : this.ensureEngine();
   }
 
-  private applyManifest(manifest: AudioManifest, engine: MsePlayerEngine | null): void {
+  private applyManifest(manifest: AudioManifest, engine: EngineLike | null): void {
     this.manifest = manifest;
     if (engine === null) {
       this.playFullFile(manifest);
@@ -761,14 +901,19 @@ export class PlayerController {
       this.cleanups.push(() => a.removeEventListener(type, fn));
     };
     on("playing", () => {
-      this.store.setState({ playing: true, loading: false });
+      this.softError = false;
+      this.store.setState({ playing: true, loading: false, error: null });
       this.startRaf();
     });
     on("pause", () => {
       // Also the OS media keys or a headset: whoever paused, the intent to play is over (unless the controller is
       // swapping the source for a new attempt, which resumes by itself).
-      if (this.now() >= this.reloadingUntil) this.wantPlay = false;
       this.stopRaf();
+      if (this.now() < this.reloadingUntil) {
+        this.store.setState({ playing: false }); // our own pause (unlock, reload): the intent to play stands
+        return;
+      }
+      this.wantPlay = false;
       this.store.setState({ playing: false, loading: false });
     });
     on("waiting", () => {

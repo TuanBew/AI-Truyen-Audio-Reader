@@ -1,3 +1,4 @@
+import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { usableAudio } from "@/lib/audio/generation";
 import type { AudioStatus } from "@/lib/types";

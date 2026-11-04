@@ -1,3 +1,4 @@
+import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { generationState } from "@/lib/audio/generation";
 import { prefetchTargets } from "@/lib/audio/prefetch";

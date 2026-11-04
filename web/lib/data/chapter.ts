@@ -1,13 +1,10 @@
+import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { loadAudioState } from "@/lib/data/audio";
 import { JOB_COLUMNS, isQueueFull } from "@/lib/jobs";
+import type { EnqueueResult } from "@/lib/reader/shared";
 import type { AnalysisSegment, AudioSnapshot, JobRow } from "@/lib/types";
 
-// A worker whose newest heartbeat is older than this counts as off (the worker beats every few seconds).
-export const WORKER_OFFLINE_MS = 60_000;
-// The text waiter refreshes the page at this interval first, then backs off with nextPollDelay (lib/data/pending-jobs).
-export const TEXT_POLL_START_MS = 2000;
-const ERROR_MAX_CHARS = 300;
 
 export type ReaderChapter = {
   novel: { id: string; title: string; chapterCount: number };
@@ -36,20 +33,6 @@ export function neighbours(index: number, chapterCount: number): { prevIndex: nu
 // The server clock handed to client islands, so their first render matches the server HTML.
 export function serverNowMs(): number {
   return Date.now();
-}
-
-export function isWorkerOffline(lastSeen: string | null, now: number = Date.now()): boolean {
-  if (lastSeen === null) return true;
-  const seen = Date.parse(lastSeen);
-  return Number.isNaN(seen) || now - seen > WORKER_OFFLINE_MS;
-}
-
-// The worker writes owner-actionable Vietnamese messages; show them, bounded.
-export function fetchFailedText(error: string | null): string {
-  const text = (error ?? "").trim();
-  if (!text) return "Không tải được chương.";
-  const shown = text.length > ERROR_MAX_CHARS ? `${text.slice(0, ERROR_MAX_CHARS)}…` : text;
-  return `Không tải được chương: ${shown}`;
 }
 
 export function requestChapterError(err: DbError): string {
@@ -171,23 +154,6 @@ async function findActiveFetchJob(supabase: SupabaseClient, userId: string, chap
   return (res.data as JobRow | null) ?? null;
 }
 
-export type EnqueueResult = { job: JobRow; error: null } | { job: null; error: string };
-
-export const CONNECT_ERROR = "Không kết nối được máy chủ. Kiểm tra mạng rồi bấm Thử lại.";
-
-// Runs a server action call so a rejected promise (network drop, deploy mismatch) becomes an error result instead of
-// reaching the error boundary through an async transition.
-export async function requestSafely(
-  call: (chapterId: string) => Promise<EnqueueResult>,
-  chapterId: string,
-): Promise<EnqueueResult> {
-  try {
-    return await call(chapterId);
-  } catch {
-    return { job: null, error: CONNECT_ERROR };
-  }
-}
-
 // The active job if there is one, else a new priority 0 fetch_chapter job. jobs_fetch_chapter_dedupe makes a racing
 // insert fail with 23505, which means an active job exists: return it. If that job finished between the insert and
 // the select, the lookup and insert run once more before the generic error.
@@ -222,3 +188,14 @@ export async function enqueueFetchChapter(
     return { job: null, error: requestChapterError({}) };
   }
 }
+
+// Shared with the client islands through lib/reader/shared; re-exported so server code and tests keep one import.
+export {
+  CONNECT_ERROR,
+  TEXT_POLL_START_MS,
+  WORKER_OFFLINE_MS,
+  fetchFailedText,
+  isWorkerOffline,
+  requestSafely,
+  type EnqueueResult,
+} from "@/lib/reader/shared";
