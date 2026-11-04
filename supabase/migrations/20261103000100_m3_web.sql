@@ -6,6 +6,13 @@ create index novels_owner_recent on public.novels (user_id, created_at desc);
 create index jobs_chapter_latest on public.jobs (user_id, type, (payload ->> 'chapter_id'), created_at desc)
   where type in ('fetch_chapter', 'synthesize');
 
+-- One live fetch job per (owner, chapter) and per (owner, novel url), like jobs_synthesize_dedupe: two tabs or
+-- two clicks raced to the same enqueue get a 23505 and the web returns the existing job.
+create unique index jobs_fetch_chapter_dedupe on public.jobs (user_id, (payload ->> 'chapter_id'))
+  where type = 'fetch_chapter' and status in ('queued', 'running');
+create unique index jobs_fetch_novel_dedupe on public.jobs (user_id, (payload ->> 'url'))
+  where type = 'fetch_novel' and status in ('queued', 'running');
+
 -- Foreign keys that had no covering index (cascade deletes and joins scan these).
 create index progress_novel_id_idx on public.progress (novel_id);
 create index progress_chapter_id_idx on public.progress (chapter_id);

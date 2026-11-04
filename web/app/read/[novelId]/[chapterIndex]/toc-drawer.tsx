@@ -7,6 +7,7 @@ import { List } from "@phosphor-icons/react/dist/ssr/List";
 import { SpeakerHigh } from "@phosphor-icons/react/dist/ssr/SpeakerHigh";
 import { X } from "@phosphor-icons/react/dist/ssr/X";
 import type { TocPage } from "@/lib/data/novel";
+import { TOC_LOAD_ERROR, parseTocResponse } from "@/lib/data/toc-response";
 
 type Props = {
   novelId: string;
@@ -18,7 +19,6 @@ type Props = {
 type View = { status: "idle" | "loading" | "ready" | "error"; page: number; toc: TocPage | null; error: string | null };
 
 const FOCUS_RING = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus)]";
-const LOAD_ERROR = "Không tải được mục lục. Thử lại sau ít phút.";
 const iconButton = `inline-flex size-10 shrink-0 items-center justify-center rounded-lg text-text-muted transition-colors hover:bg-surface-raised hover:text-text active:scale-[0.98] ${FOCUS_RING}`;
 const pageButton = `inline-flex h-9 items-center rounded-lg border border-border px-3 text-sm text-text transition-colors hover:border-border-strong hover:bg-surface-raised active:scale-[0.98] disabled:opacity-50 disabled:hover:border-border disabled:hover:bg-transparent ${FOCUS_RING}`;
 
@@ -43,14 +43,12 @@ export function TocDrawer({ novelId, currentIndex, initialPage }: Props) {
       try {
         const res = await fetch(`/api/novels/${novelId}/toc?page=${page}`, { headers: { Accept: "application/json" } });
         const body: unknown = await res.json().catch(() => null);
-        if (!res.ok) {
-          const message = (body as { error?: unknown } | null)?.error;
-          next = { status: "error", page, toc: null, error: typeof message === "string" ? message : LOAD_ERROR };
-        } else {
-          next = { status: "ready", page, toc: body as TocPage, error: null };
-        }
+        const parsed = parseTocResponse(res.status, body);
+        next = parsed.ok
+          ? { status: "ready", page, toc: parsed.toc, error: null }
+          : { status: "error", page, toc: null, error: parsed.error };
       } catch {
-        next = { status: "error", page, toc: null, error: LOAD_ERROR };
+        next = { status: "error", page, toc: null, error: TOC_LOAD_ERROR };
       }
       if (id === latestRequest.current) setView(next);
     },

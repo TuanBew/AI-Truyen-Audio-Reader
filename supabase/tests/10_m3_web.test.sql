@@ -1,6 +1,6 @@
 -- M3: read-path indexes, per-user API rate limiter, web vitals.
 begin;
-select plan(46);
+select plan(55);
 
 insert into auth.users (id, instance_id, aud, role, email, raw_app_meta_data, raw_user_meta_data, created_at, updated_at)
 values
@@ -8,6 +8,8 @@ values
   ('22222222-2222-2222-2222-222222222222', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'b@audiotruyen.test', '{}', '{}', now(), now());
 
 -- Indexes
+select has_index('public', 'jobs', 'jobs_fetch_chapter_dedupe', 'one live fetch_chapter job per owner and chapter');
+select has_index('public', 'jobs', 'jobs_fetch_novel_dedupe', 'one live fetch_novel job per owner and url');
 select has_index('public', 'progress', 'progress_owner_recent', 'progress (user_id, updated_at desc)');
 select has_index('public', 'novels', 'novels_owner_recent', 'novels (user_id, created_at desc)');
 select has_index('public', 'jobs', 'jobs_chapter_latest', 'jobs latest per chapter');
@@ -153,6 +155,24 @@ select is(
 );
 select is(public.record_web_vitals('[{"name":"INP","value":50,"route":"/"}]'::jsonb), 0, 'the 31st call in a window stores nothing');
 select is(public.api_rate_limit_hit('audio_urls'), true, 'the vitals bucket is independent of audio_urls');
+reset role;
+
+-- Dedupe of live fetch jobs (user A, then B). A finished job no longer blocks a new one.
+set local role authenticated;
+set local request.jwt.claims to '{"sub": "11111111-1111-1111-1111-111111111111", "role": "authenticated"}';
+select lives_ok($$insert into public.jobs (user_id, type, payload, priority) values ('11111111-1111-1111-1111-111111111111', 'fetch_chapter', '{"chapter_id": "ch1"}', 0)$$, 'first fetch_chapter job');
+select throws_ok($$insert into public.jobs (user_id, type, payload, priority) values ('11111111-1111-1111-1111-111111111111', 'fetch_chapter', '{"chapter_id": "ch1"}', 0)$$, '23505', null, 'duplicate live fetch_chapter job is rejected');
+select lives_ok($$insert into public.jobs (user_id, type, payload, priority) values ('11111111-1111-1111-1111-111111111111', 'fetch_chapter', '{"chapter_id": "ch2"}', 0)$$, 'another chapter is not a duplicate');
+select lives_ok($$insert into public.jobs (user_id, type, payload, priority) values ('11111111-1111-1111-1111-111111111111', 'fetch_novel', '{"url": "https://truyenfull.live/x/"}', 0)$$, 'first fetch_novel job for a url');
+select throws_ok($$insert into public.jobs (user_id, type, payload, priority) values ('11111111-1111-1111-1111-111111111111', 'fetch_novel', '{"url": "https://truyenfull.live/x/"}', 0)$$, '23505', null, 'duplicate live fetch_novel job is rejected');
+set local request.jwt.claims to '{"sub": "22222222-2222-2222-2222-222222222222", "role": "authenticated"}';
+select lives_ok($$insert into public.jobs (user_id, type, payload, priority) values ('22222222-2222-2222-2222-222222222222', 'fetch_chapter', '{"chapter_id": "ch1"}', 0)$$, 'the same chapter id for another owner is not a duplicate');
+reset role;
+update public.jobs set status = 'done'
+ where user_id = '11111111-1111-1111-1111-111111111111' and type = 'fetch_chapter' and payload ->> 'chapter_id' = 'ch1';
+set local role authenticated;
+set local request.jwt.claims to '{"sub": "11111111-1111-1111-1111-111111111111", "role": "authenticated"}';
+select lives_ok($$insert into public.jobs (user_id, type, payload, priority) values ('11111111-1111-1111-1111-111111111111', 'fetch_chapter', '{"chapter_id": "ch1"}', 0)$$, 'a new fetch_chapter job is allowed once the first is done');
 reset role;
 
 select * from finish();

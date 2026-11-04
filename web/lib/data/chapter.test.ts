@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { describe, expect, it } from "vitest";
 import {
+  CONNECT_ERROR,
   TEXT_POLL_START_MS,
   WORKER_OFFLINE_MS,
   enqueueFetchChapter,
@@ -10,6 +11,7 @@ import {
   loadReaderChapter,
   neighbours,
   requestChapterError,
+  requestSafely,
 } from "./chapter";
 import { POLL_START_MS, nextPollDelay } from "./pending-jobs";
 
@@ -80,11 +82,15 @@ type Call = { table: string; ops: string[] };
 type FakeOpts = {
   rpc?: { data: unknown; error: { code?: string; message: string } | null };
   insertError?: { code: string; message: string };
+  // Consumed one per insert (null = the insert succeeds); replaces insertError when given.
+  insertErrors?: ({ code: string; message: string } | null)[];
 };
 
 // Minimal PostgREST stand-in: select, eq, in, order, limit, maybeSingle, insert(...).select().single(), rpc.
 function fakeSupabase(tables: Record<string, Row[]>, opts: FakeOpts = {}, calls: Call[] = []) {
   const rpcResult = opts.rpc ?? { data: "voice-hash-1", error: null };
+  const errors = opts.insertErrors ? [...opts.insertErrors] : null;
+  const nextInsertError = () => (errors ? (errors.shift() ?? null) : (opts.insertError ?? null));
   const get = (r: Row, col: string): unknown => {
     const m = /^(\w+)->>(\w+)$/.exec(col);
     return m ? (r[m[1]] as Row | undefined)?.[m[2]] : r[col];
@@ -101,6 +107,7 @@ function fakeSupabase(tables: Record<string, Row[]>, opts: FakeOpts = {}, calls:
       let order: [string, boolean] | null = null;
       let max = Infinity;
       let inserted: Row | null = null;
+      let insertError: { code: string; message: string } | null = null;
       const run = () => {
         let rows = (tables[table] ?? []).filter((r) => filters.every((f) => f(r)));
         if (order) {
@@ -137,14 +144,15 @@ function fakeSupabase(tables: Record<string, Row[]>, opts: FakeOpts = {}, calls:
         },
         insert: (row: Row) => {
           ops.push(`insert:${JSON.stringify(row)}`);
-          if (!opts.insertError) {
+          insertError = nextInsertError();
+          if (!insertError) {
             inserted = { id: "new-job", status: "queued", error: null, created_at: "2026-11-03T10:00:00Z", ...row };
             (tables[table] ??= []).push(inserted);
           }
           return builder;
         },
         single: () =>
-          Promise.resolve(opts.insertError ? { data: null, error: opts.insertError } : { data: inserted, error: null }),
+          Promise.resolve(insertError ? { data: null, error: insertError } : { data: inserted, error: null }),
         maybeSingle: () => Promise.resolve({ data: run()[0] ?? null, error: null }),
         then: (resolve: (v: unknown) => unknown) => Promise.resolve({ data: run(), error: null }).then(resolve),
       };
@@ -346,6 +354,28 @@ describe("enqueueFetchChapter", () => {
     expect(res).toMatchObject({ error: null, job: { id: "live-job" } });
   });
 
+  it("on 23505 with nothing found (the job finished meanwhile) retries the insert once", async () => {
+    const calls: Call[] = [];
+    const res = await enqueueFetchChapter(
+      fakeSupabase({ jobs: [] }, { insertErrors: [{ code: "23505", message: "duplicate key" }, null] }, calls),
+      USER_ID,
+      CHAPTER_ID,
+    );
+    expect(res).toMatchObject({ error: null, job: { id: "new-job" } });
+    expect(calls.flatMap((c) => c.ops).filter((o) => o.startsWith("insert:"))).toHaveLength(2);
+  });
+
+  it("gives the generic error when the retried insert also hits 23505 with nothing found", async () => {
+    const calls: Call[] = [];
+    const res = await enqueueFetchChapter(
+      fakeSupabase({ jobs: [] }, { insertError: { code: "23505", message: "duplicate key" } }, calls),
+      USER_ID,
+      CHAPTER_ID,
+    );
+    expect(res).toEqual({ job: null, error: "Không yêu cầu được tải chương. Thử lại sau ít phút." });
+    expect(calls.flatMap((c) => c.ops).filter((o) => o.startsWith("insert:"))).toHaveLength(2);
+  });
+
   it("maps other insert errors to Vietnamese copy", async () => {
     const res = await enqueueFetchChapter(
       fakeSupabase({ jobs: [] }, { insertError: { code: "42501", message: "permission denied" } }),
@@ -353,5 +383,18 @@ describe("enqueueFetchChapter", () => {
       CHAPTER_ID,
     );
     expect(res).toEqual({ job: null, error: "Không yêu cầu được tải chương. Thử lại sau ít phút." });
+  });
+});
+
+describe("requestSafely", () => {
+  it("passes a result through", async () => {
+    const ok = { job: null, error: "x" } as const;
+    expect(await requestSafely(async () => ok, CHAPTER_ID)).toBe(ok);
+  });
+
+  it("turns a rejected server action into the connection error instead of throwing", async () => {
+    const res = await requestSafely(() => Promise.reject(new Error("Failed to fetch")), CHAPTER_ID);
+    expect(res).toEqual({ job: null, error: CONNECT_ERROR });
+    expect(CONNECT_ERROR).toBe("Không kết nối được máy chủ. Kiểm tra mạng rồi bấm Thử lại.");
   });
 });

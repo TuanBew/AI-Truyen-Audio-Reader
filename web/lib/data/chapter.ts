@@ -169,31 +169,50 @@ async function findActiveFetchJob(supabase: SupabaseClient, userId: string, chap
 
 export type EnqueueResult = { job: JobRow; error: null } | { job: null; error: string };
 
-// The active job if there is one, else a new priority 0 fetch_chapter job. There is no unique index for
-// fetch_chapter (only synthesize has one), so concurrent callers may both insert; the worker handles the
-// second job as a cheap re-fetch. A 23505 would mean a dedupe index was added: it returns the existing job.
+export const CONNECT_ERROR = "Không kết nối được máy chủ. Kiểm tra mạng rồi bấm Thử lại.";
+
+// Runs a server action call so a rejected promise (network drop, deploy mismatch) becomes an error result instead of
+// reaching the error boundary through an async transition.
+export async function requestSafely(
+  call: (chapterId: string) => Promise<EnqueueResult>,
+  chapterId: string,
+): Promise<EnqueueResult> {
+  try {
+    return await call(chapterId);
+  } catch {
+    return { job: null, error: CONNECT_ERROR };
+  }
+}
+
+// The active job if there is one, else a new priority 0 fetch_chapter job. jobs_fetch_chapter_dedupe makes a racing
+// insert fail with 23505, which means an active job exists: return it. If that job finished between the insert and
+// the select, the lookup and insert run once more before the generic error.
 export async function enqueueFetchChapter(
   supabase: SupabaseClient,
   userId: string,
   chapterId: string,
 ): Promise<EnqueueResult> {
   try {
-    const active = await findActiveFetchJob(supabase, userId, chapterId);
-    if (active) return { job: active, error: null };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const active = await findActiveFetchJob(supabase, userId, chapterId);
+      if (active) return { job: active, error: null };
 
-    const inserted = await supabase
-      .from("jobs")
-      .insert({ type: "fetch_chapter", payload: { chapter_id: chapterId }, priority: 0, user_id: userId })
-      .select(JOB_COLUMNS)
-      .single();
-    if (!inserted.error) return { job: inserted.data as JobRow, error: null };
+      const inserted = await supabase
+        .from("jobs")
+        .insert({ type: "fetch_chapter", payload: { chapter_id: chapterId }, priority: 0, user_id: userId })
+        .select(JOB_COLUMNS)
+        .single();
+      if (!inserted.error) return { job: inserted.data as JobRow, error: null };
 
-    if (inserted.error.code === "23505") {
-      const existing = await findActiveFetchJob(supabase, userId, chapterId);
-      if (existing) return { job: existing, error: null };
+      if (inserted.error.code === "23505") {
+        const existing = await findActiveFetchJob(supabase, userId, chapterId);
+        if (existing) return { job: existing, error: null };
+        continue;
+      }
+      console.error("enqueueFetchChapter: insert failed", inserted.error.code, inserted.error.message);
+      return { job: null, error: requestChapterError(inserted.error) };
     }
-    console.error("enqueueFetchChapter: insert failed", inserted.error.code, inserted.error.message);
-    return { job: null, error: requestChapterError(inserted.error) };
+    return { job: null, error: requestChapterError({}) };
   } catch (err) {
     console.error("enqueueFetchChapter failed", err);
     return { job: null, error: requestChapterError({}) };

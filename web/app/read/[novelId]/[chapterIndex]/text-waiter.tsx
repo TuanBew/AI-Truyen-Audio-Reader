@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
-import { TEXT_POLL_START_MS, fetchFailedText } from "@/lib/data/chapter";
+import { TEXT_POLL_START_MS, fetchFailedText, requestSafely } from "@/lib/data/chapter";
 import { nextPollDelay } from "@/lib/data/pending-jobs";
 import type { JobRow } from "@/lib/types";
 import { requestChapterText } from "./actions";
@@ -32,7 +32,7 @@ export function TextWaiter({ chapterId, job, workerOffline }: Props) {
 
   const request = useCallback(() => {
     startTransition(async () => {
-      const res = await requestChapterText(chapterId);
+      const res = await requestSafely(requestChapterText, chapterId);
       if (res.error !== null) {
         setRequestError(res.error);
         return;
