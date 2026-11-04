@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { usableAudio } from "@/lib/audio/generation";
 import type { AudioStatus } from "@/lib/types";
 
 export const TOC_PAGE_SIZE = 100;
@@ -53,12 +54,7 @@ export function tocItem(chapter: TocChapter, audio: TocAudio | null, listened: b
     index: chapter.index,
     title: chapter.title,
     hasText: chapter.text_hash !== null,
-    audioReady:
-      audio !== null &&
-      audio.status === "ready" &&
-      audio.text_hash !== null &&
-      chapter.text_hash !== null &&
-      audio.text_hash === chapter.text_hash,
+    audioReady: usableAudio(audio, chapter.text_hash)?.status === "ready",
     listened,
     isNew: chapter.is_new,
   };

@@ -1,4 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { loadAudioState } from "@/lib/data/audio";
+import { JOB_COLUMNS, isQueueFull } from "@/lib/jobs";
 import type { AnalysisSegment, AudioSnapshot, JobRow } from "@/lib/types";
 
 // A worker whose newest heartbeat is older than this counts as off (the worker beats every few seconds).
@@ -6,7 +8,6 @@ export const WORKER_OFFLINE_MS = 60_000;
 // The text waiter refreshes the page at this interval first, then backs off with nextPollDelay (lib/data/pending-jobs).
 export const TEXT_POLL_START_MS = 2000;
 const ERROR_MAX_CHARS = 300;
-const JOB_COLUMNS = "id,type,status,error,priority,created_at";
 
 export type ReaderChapter = {
   novel: { id: string; title: string; chapterCount: number };
@@ -47,8 +48,7 @@ export function fetchFailedText(error: string | null): string {
 }
 
 export function requestChapterError(err: DbError): string {
-  // 54000 is also the payload-too-large code, so the queue cap is told apart by the trigger's message.
-  if (err.code === "54000" && /queue limit/i.test(err.message ?? "")) {
+  if (isQueueFull(err)) {
     return "Hàng chờ đã đầy (500 job). Đợi worker chạy bớt rồi thử lại.";
   }
   return "Không yêu cầu được tải chương. Thử lại sau ít phút.";
@@ -102,10 +102,9 @@ export async function loadReaderChapter(
   const workerLastSeen = (check(workerRes).data as { last_seen: string } | null)?.last_seen ?? null;
   const progress = check(progressRes).data as { chapter_id: string; segment_index: number } | null;
 
-  const [segments, audio] = await Promise.all([
+  const [segments, snapshot] = await Promise.all([
     loadSegments(supabase, chapter),
-    // Task 9 replaces this with loadAudioSnapshot (audio row, newest synthesize job, queue position).
-    Promise.resolve({ audio: null, job: null, queuePosition: null } as const),
+    loadAudioState(supabase, { chapterId: chapter.id, voiceHash, chapterTextHash: chapter.text_hash, workerLastSeen }),
   ]);
 
   const chapterCount = Math.max(0, novel.chapter_count);
@@ -113,7 +112,7 @@ export async function loadReaderChapter(
     novel: { id: novel.id, title: novel.title, chapterCount },
     chapter: { id: chapter.id, index: chapter.index, title: chapter.title, textHash: chapter.text_hash, text: chapter.text },
     segments,
-    snapshot: { chapterId: chapter.id, voiceHash, chapterTextHash: chapter.text_hash, workerLastSeen, ...audio },
+    snapshot,
     resumeSegment: progress && progress.chapter_id === chapter.id ? progress.segment_index : null,
     ...neighbours(chapter.index, chapterCount),
   };
