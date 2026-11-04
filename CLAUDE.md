@@ -69,7 +69,7 @@ The player fixture `web/tests/fixtures/sine-25s/` comes from the production enco
 
 ## Database rules
 
-- Migrations in `supabase/migrations/` that are already applied to cloud (currently `20261015000100`, `20261015000200`, `20261015000300`, `20261019000100`, `20261019000200`, `20261019000300`, `20261022000100`) are never edited. Changes go in new timestamped files.
+- Migrations in `supabase/migrations/` that are already applied to cloud (currently `20261015000100`, `20261015000200`, `20261015000300`, `20261019000100`, `20261019000200`, `20261019000300`, `20261022000100`, `20261103000100`) are never edited. Changes go in new timestamped files.
 - Every new table: `enable row level security` plus explicit policies. Worker-only tables also `revoke insert, update, delete, truncate ... from authenticated`.
 - Every new function: `revoke execute ... from public, anon, authenticated`, then grant only the intended roles. `security definer` functions use `set search_path = ''` and fully qualified names.
 - A `security definer` function runs as `postgres`, which `jobs_guard_write` trusts: never expose one to `authenticated` that writes `jobs`.
@@ -80,7 +80,7 @@ The player fixture `web/tests/fixtures/sine-25s/` comes from the production enco
 `supabase db push` fails on this project: the CLI login role `cli_login_postgres` cannot be created (`DbConfigLoginRoleStatusError`). Use this procedure instead (the one used in M1). Project ref: `pvslnmyzdbntyuckmncs` (also in `supabase/.temp/project-ref`; not a secret).
 
 0. Ask the owner before every cloud apply; this changes their production database.
-1. Run `npx --yes supabase@2.121.0 test db` locally first; it must pass.
+1. Run `npx --yes supabase@2.121.0 db reset`, then `npx --yes supabase@2.121.0 test db` locally; it must pass. The pgTAP queue tests need an empty `jobs` table, so a local DB that a worker or the web has used can fail them without any defect.
 2. List what is already applied (`select version from supabase_migrations.schema_migrations order by 1;`) and apply only newer files.
 3. For each new migration file, in order, POST to the Management API `https://api.supabase.com/v1/projects/<project-ref>/database/query` a single request whose SQL is the file contents followed by `insert into supabase_migrations.schema_migrations (version, name) values ('<version>', '<name>') on conflict do nothing;`, so applying and recording happen in one implicit transaction (it runs as `postgres`).
 4. Verify: the version is now listed in `supabase_migrations.schema_migrations`; RLS is enabled on every public table; function ACLs match the allow-list; anon has no table grants.
