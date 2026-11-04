@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Be_Vietnam_Pro } from "next/font/google";
 import "./globals.css";
+import { WebVitals } from "./web-vitals";
 
 const beVietnam = Be_Vietnam_Pro({
   subsets: ["vietnamese", "latin"],
@@ -17,7 +18,9 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="vi" className={beVietnam.variable}>
-      <body className="min-h-[100dvh] font-sans antialiased">{children}</body>
+      <body className="min-h-[100dvh] font-sans antialiased">{children}
+        <WebVitals />
+      </body>
     </html>
   );
 }

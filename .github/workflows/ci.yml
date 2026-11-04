@@ -35,6 +35,16 @@ jobs:
       # build generates next-env.d.ts (gitignored), which typecheck needs
       - run: npm run build
       - run: npm run typecheck
+      # Reads .next/diagnostics/route-bundle-stats.json from the build above; needs no R2 or Supabase env.
+      - name: Route JS budgets (first load, gzip)
+        run: npm run check:bundle
+      - name: Install Chromium for the browser tests
+        run: npx playwright install --with-deps chromium
+      - name: Browser tests (MSE player, audio decode only; no audio device needed)
+        # Vitest browser mode intermittently fails with "Cannot connect to the iframe" (about 1 run in 6, seen
+        # locally with fileParallelism off too) or hangs, with every test passing on a rerun. Retry once, and bound
+        # each attempt (a normal run takes under a minute) so a hang cannot eat the job timeout.
+        run: timeout 240 npm run test:browser || timeout 240 npm run test:browser
 
   worker:
     runs-on: ubuntu-latest

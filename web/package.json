@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
+    "check:bundle": "node scripts/check-route-js.mjs",
     "test": "vitest run --project unit",
     "test:browser": "vitest run --project browser --reporter=verbose"
   },

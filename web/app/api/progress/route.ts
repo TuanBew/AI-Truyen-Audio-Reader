@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { crossSite } from "@/lib/http/origin";
 import { progressBody } from "@/lib/progress/body";
 import { createClient, getUserId } from "@/lib/supabase/server";
 
@@ -8,18 +9,6 @@ const NOT_FOUND = "Không tìm thấy chương này.";
 
 function fail(status: number, error: string) {
   return NextResponse.json({ error }, { status, headers: NO_STORE });
-}
-
-// A browser sends Origin on POST. A cross-site page must not write the owner's progress, even though the cookie is
-// SameSite=Lax already; a request without Origin (curl, tests) passes because it carries no browser cookie risk.
-function crossSite(request: NextRequest): boolean {
-  const origin = request.headers.get("origin");
-  if (!origin) return false;
-  try {
-    return new URL(origin).host !== request.nextUrl.host;
-  } catch {
-    return true;
-  }
 }
 
 // Saves the listening position; with finished it also marks the chapter as listened. user_id always comes from the
