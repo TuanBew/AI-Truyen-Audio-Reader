@@ -75,6 +75,14 @@ class Store:
                 returning=ReturnMethod.minimal,
             ).execute()
 
+    def raise_chapter_count(self, novel_id: str, count: int) -> None:
+        """Raise novels.chapter_count to `count` once a TOC page is committed, so the web sees the
+        chapters read so far. One conditional UPDATE: a concurrent or repeated run never lowers it.
+        finish_toc stays the final authority."""
+        self._db.table("novels").update({"chapter_count": count}).eq("id", novel_id).lt(
+            "chapter_count", count
+        ).execute()
+
     def finish_toc(self, novel_id: str, chapter_count: int) -> None:
         self._db.table("novels").update(
             {"chapter_count": chapter_count, "last_checked_at": _now()}

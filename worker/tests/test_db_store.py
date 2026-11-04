@@ -122,3 +122,26 @@ def test_store_analysis_roundtrip(admin_client, owner):
         "male",
         ("Phong ca",),
     )
+
+
+def test_raise_chapter_count_is_monotonic(admin_client, owner):
+    store = Store(admin_client)
+    novel_id = store.upsert_novel(owner["id"], INFO)
+
+    def count() -> int:
+        return (
+            admin_client.table("novels")
+            .select("chapter_count")
+            .eq("id", novel_id)
+            .execute()
+            .data[0]["chapter_count"]
+        )
+
+    store.raise_chapter_count(novel_id, 50)
+    assert count() == 50  # readable after page 1, before finish_toc
+    store.raise_chapter_count(novel_id, 100)
+    assert count() == 100
+    store.finish_toc(novel_id, 100)
+    # A re-run reads page 1 of an already complete novel: the count must not fall.
+    store.raise_chapter_count(novel_id, 50)
+    assert count() == 100

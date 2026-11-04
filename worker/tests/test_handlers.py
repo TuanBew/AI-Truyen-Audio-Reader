@@ -71,6 +71,9 @@ class FakeStore:
     def upsert_chapters(self, user_id, novel_id, chapters):
         self.events.append(("chapters", [c.index for c in chapters]))
 
+    def raise_chapter_count(self, novel_id, count):
+        self.events.append(("raise", count))
+
     def finish_toc(self, novel_id, count):
         self.events.append(("finish", count))
 
@@ -119,7 +122,11 @@ def test_fetch_novel_commits_each_page_before_reading_the_next():
         job("fetch_novel", {"url": "https://truyenfull.live/a/"}), JobContext(job())
     )
     assert result == {"novel_id": "novel-uuid", "chapter_count": 53}
-    assert [e[0] for e in events] == ["page", "novel", "chapters", "page", "chapters", "finish"]
+    assert [e[0] for e in events] == [
+        *["page", "novel", "chapters", "raise"],
+        *["page", "chapters", "raise", "finish"],
+    ]
+    assert [e for e in events if e[0] == "raise"] == [("raise", 50), ("raise", 53)]
 
 
 def test_fetch_novel_rejects_foreign_urls():
