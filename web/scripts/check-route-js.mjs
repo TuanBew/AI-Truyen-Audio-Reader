@@ -14,12 +14,20 @@ export const BUDGETS_KB = {
   "/login": 150,
 };
 
+// Windows builds write backslashes, Linux builds forward slashes: split on both.
+export function chunkSegments(p) {
+  return p.split(/[\\/]/).filter(Boolean);
+}
+
 // stats: [{ route, firstLoadChunkPaths }]; gzipSize(path) -> bytes. A shared chunk counts for every route listing it.
 export function checkBudgets(stats, gzipSize, budgets = BUDGETS_KB) {
   const byRoute = new Map(stats.map((s) => [s.route, s]));
   return Object.entries(budgets).map(([route, budgetKb]) => {
     const found = byRoute.get(route);
-    if (!found) return { route, kb: NaN, budgetKb, ok: false };
+    // A missing route or an empty/non-array chunk list means the stats format changed: fail, never pass at 0 KB.
+    if (!found || !Array.isArray(found.firstLoadChunkPaths) || found.firstLoadChunkPaths.length === 0) {
+      return { route, kb: NaN, budgetKb, ok: false };
+    }
     const bytes = found.firstLoadChunkPaths.reduce((sum, p) => sum + gzipSize(p), 0);
     const kb = bytes / KB;
     return { route, kb, budgetKb, ok: kb <= budgetKb };
@@ -48,8 +56,7 @@ function main() {
   const cache = new Map();
   const gzipSize = (p) => {
     if (!cache.has(p)) {
-      // Windows builds write backslashes, Linux builds forward slashes.
-      const file = path.join(root, ...p.split(/[\/]/));
+      const file = path.join(root, ...chunkSegments(p));
       cache.set(p, gzipSync(readFileSync(file)).length);
     }
     return cache.get(p);

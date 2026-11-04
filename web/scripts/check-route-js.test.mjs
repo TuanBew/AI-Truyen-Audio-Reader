@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BUDGETS_KB, checkBudgets } from "./check-route-js.mjs";
+import { BUDGETS_KB, checkBudgets, chunkSegments } from "./check-route-js.mjs";
 
 const KB = 1024;
 // Each fake chunk "<name>" weighs the number of KB in its name suffix: "a-100" = 100 KB.
@@ -51,5 +51,21 @@ describe("checkBudgets", () => {
       "/read/[novelId]/[chapterIndex]": 220,
       "/login": 150,
     });
+  });
+});
+
+describe("empty or malformed chunk lists", () => {
+  it.each([["empty", []], ["missing", undefined], ["not an array", "a-10"]])("fails a route with an %s chunk list", (_l, chunks) => {
+    const [row] = checkBudgets([{ route: "/", firstLoadChunkPaths: chunks }], size, { "/": 150 });
+    expect(row.ok).toBe(false);
+    expect(row.kb).toBeNaN();
+  });
+});
+
+describe("chunkSegments", () => {
+  it("splits Windows and POSIX chunk paths the same way", () => {
+    const win = ".next" + String.fromCharCode(92) + "static" + String.fromCharCode(92) + "chunks" + String.fromCharCode(92) + "a.js";
+    expect(chunkSegments(win)).toEqual([".next", "static", "chunks", "a.js"]);
+    expect(chunkSegments(".next/static/chunks/a.js")).toEqual([".next", "static", "chunks", "a.js"]);
   });
 });
