@@ -41,3 +41,9 @@ export async function waitFor(predicate: () => boolean, what: string, timeoutMs 
     await new Promise((r) => setTimeout(r, 20));
   }
 }
+
+// A playable single file (init + every cluster), standing in for full.webm.
+export async function fullFileUrl(): Promise<string> {
+  const parts = await Promise.all([INIT_URL, ...SEG_URLS].map(fetchFixture));
+  return URL.createObjectURL(new Blob(parts, { type: "audio/webm" }));
+}

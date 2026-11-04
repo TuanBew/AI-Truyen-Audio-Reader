@@ -48,7 +48,8 @@ it("plays across cluster boundaries without a step, dip or dropped stretch", asy
   engine.load(fixtureManifest());
   await ctx.resume();
   await audio.play();
-  await ended;
+  // A stall must still produce numbers below, so wait for "ended" with a bound instead of until the test timeout.
+  const endedInTime = await Promise.race([ended.then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), 32_000))]);
   await new Promise((r) => setTimeout(r, 300)); // let the worklet flush its last blocks
   engine.destroy();
   await ctx.close();
@@ -90,10 +91,13 @@ it("plays across cluster boundaries without a step, dip or dropped stretch", asy
     `continuity: max step ${maxStep.toFixed(5)}, min boundary 1 ms RMS ${minBoundaryRms.toFixed(4)} ` +
       `(level ${level.toFixed(4)}), captured ${x.length} of ${FIXTURE_DURATION_MS * 48} expected samples`,
   );
+  // Dropped or stalled stretch first: it explains any NaN window below.
+  expect(x.length).toBeGreaterThanOrEqual(0.98 * FIXTURE_DURATION_MS * 48);
   expect(maxStep).toBeLessThan(0.03);
+  expect(Number.isFinite(minBoundaryRms)).toBe(true);
   expect(minBoundaryRms).toBeGreaterThanOrEqual(0.5 * level);
 
   // 3. Nothing dropped (and no long stall that would stretch playback).
-  expect(x.length).toBeGreaterThanOrEqual(0.98 * FIXTURE_DURATION_MS * 48);
   expect(x.length).toBeLessThanOrEqual(1.05 * FIXTURE_DURATION_MS * 48);
+  expect(endedInTime).toBe(true);
 });

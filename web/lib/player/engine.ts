@@ -54,6 +54,8 @@ export class MsePlayerEngine {
   private appended = 0;
   private ended = false;
   private pumping = false;
+  private onFallbackMetadata: (() => void) | null = null;
+  private onFallbackError: (() => void) | null = null;
   private halted = false; // fatal error or fallback: nothing more is appended until load()
   private generation = 0; // bumped by load() and destroy(); stale async work checks it and stops quietly
   private abort = new AbortController();
@@ -88,7 +90,7 @@ export class MsePlayerEngine {
     this.halted = false;
 
     if (typeof MediaSource === "undefined" || !MediaSource.isTypeSupported(MIME)) {
-      this.fallbackOrFatal();
+      void this.fallbackOrFatal();
       return;
     }
     const ms = new MediaSource();
@@ -105,7 +107,7 @@ export class MsePlayerEngine {
           const duration = durationToSet(this.manifest!, this.openedReady, this.bufferedEndS());
           if (duration !== null) ms.duration = duration;
         } catch {
-          this.fallbackOrFatal();
+          void this.fallbackOrFatal();
           return;
         }
         void this.pump(gen);
@@ -137,6 +139,7 @@ export class MsePlayerEngine {
   private teardown(): void {
     this.abort.abort();
     this.audio.removeEventListener("error", this.onAudioError);
+    this.clearFallbackListeners();
     if (this.objectUrl) URL.revokeObjectURL(this.objectUrl);
     this.objectUrl = null;
     this.mediaSource = null;
@@ -144,9 +147,16 @@ export class MsePlayerEngine {
     this.pumping = false;
   }
 
+  private clearFallbackListeners(): void {
+    if (this.onFallbackMetadata) this.audio.removeEventListener("loadedmetadata", this.onFallbackMetadata);
+    if (this.onFallbackError) this.audio.removeEventListener("error", this.onFallbackError);
+    this.onFallbackMetadata = null;
+    this.onFallbackError = null;
+  }
+
   private readonly onAudioError = (): void => {
     // A decode error after the append succeeded (the element, not the SourceBuffer, rejects the stream).
-    if (!this.halted) this.fallbackOrFatal();
+    if (!this.halted) void void this.fallbackOrFatal();
   };
 
   private bufferedEndS(): number {
@@ -160,34 +170,60 @@ export class MsePlayerEngine {
     this.events.onFatal(kind);
   }
 
-  // MSE failed: play the single full file when there is one (from the same position), else report it.
-  private fallbackOrFatal(): void {
+  // MSE failed: play the single full file when there is one (from the same position), else report it. The signed URL
+  // captured at load() may have expired (they live 10 minutes), so the manifest is refreshed first; if that fails the
+  // URL we have is used. The element's error listener stays on while it plays the full file: a dead URL reports
+  // instead of hanging.
+  private async fallbackOrFatal(): Promise<void> {
     if (this.halted) return;
-    const full = this.manifest?.full ?? null;
-    if (full === null) {
+    if (this.manifest?.full == null && !this.refreshManifest) {
       this.fatal("mse");
       return;
     }
     this.halted = true;
+    const gen = ++this.generation; // stops the pump and any in-flight fetch or append from reporting
+    this.abort.abort();
+    this.audio.removeEventListener("error", this.onAudioError);
     const audio = this.audio;
     const position = audio.currentTime;
     const wasPlaying = !audio.paused;
-    this.abort.abort();
-    audio.removeEventListener("error", this.onAudioError);
+
+    let full = this.manifest?.full ?? null;
+    let refreshOk = false;
+    if (this.refreshManifest) {
+      try {
+        const next = await this.refreshManifest();
+        if (next.attempt === this.manifest?.attempt && next.full) {
+          full = next.full;
+          refreshOk = true;
+        }
+      } catch {
+        // keep the URL we have
+      }
+      if (gen !== this.generation) return; // load() or destroy() ran meanwhile
+    }
+    if (full === null) {
+      this.events.onFatal("mse");
+      return;
+    }
+
     const oldUrl = this.objectUrl;
     this.objectUrl = null;
     this.mediaSource = null;
     this.sourceBuffer = null;
+    this.onFallbackMetadata = () => {
+      this.onFallbackMetadata = null;
+      if (position > 0) audio.currentTime = position;
+      if (wasPlaying) audio.play().catch(() => {});
+    };
+    this.onFallbackError = () => {
+      this.clearFallbackListeners();
+      this.events.onFatal(refreshOk ? "network" : "expired");
+    };
+    audio.addEventListener("loadedmetadata", this.onFallbackMetadata, { once: true });
+    audio.addEventListener("error", this.onFallbackError, { once: true });
     audio.src = full;
     if (oldUrl) URL.revokeObjectURL(oldUrl);
-    audio.addEventListener(
-      "loadedmetadata",
-      () => {
-        if (position > 0) audio.currentTime = position;
-        if (wasPlaying) audio.play().catch(() => {});
-      },
-      { once: true },
-    );
     this.events.onFallback();
   }
 
@@ -215,6 +251,7 @@ export class MsePlayerEngine {
         if (data === null || gen !== this.generation) return;
         if (!(await this.append(gen, data))) return;
         this.appended++;
+        if (gen !== this.generation || this.halted) return;
         this.events.onBufferedEndMs(this.bufferedEndS() * 1000);
       }
     } finally {
@@ -231,7 +268,7 @@ export class MsePlayerEngine {
     try {
       ms.endOfStream();
     } catch {
-      this.fallbackOrFatal();
+      void this.fallbackOrFatal();
     }
   }
 
@@ -245,6 +282,7 @@ export class MsePlayerEngine {
     let refreshed = false;
     let failures = 0;
     for (;;) {
+      if (this.halted) return null;
       const url = pick(this.manifest!);
       if (url === null) {
         this.fatal("expired");
@@ -300,7 +338,7 @@ export class MsePlayerEngine {
       };
       const onError = () => {
         cleanup();
-        if (gen === this.generation) this.fallbackOrFatal();
+        if (gen === this.generation) void this.fallbackOrFatal();
         resolve(false);
       };
       sb.addEventListener("updateend", onEnd);
@@ -310,7 +348,7 @@ export class MsePlayerEngine {
       } catch {
         // Includes QuotaExceededError, which is not expected at 48 kbps: treated as an MSE error.
         cleanup();
-        if (gen === this.generation) this.fallbackOrFatal();
+        if (gen === this.generation) void this.fallbackOrFatal();
         resolve(false);
       }
     });
