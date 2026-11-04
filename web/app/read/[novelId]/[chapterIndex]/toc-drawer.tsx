@@ -7,6 +7,7 @@ import { List } from "@phosphor-icons/react/dist/ssr/List";
 import { SpeakerHigh } from "@phosphor-icons/react/dist/ssr/SpeakerHigh";
 import { X } from "@phosphor-icons/react/dist/ssr/X";
 import type { TocPage } from "@/lib/data/novel";
+import { TOGGLE_TOC_EVENT } from "./toc-event";
 import { TOC_LOAD_ERROR, parseTocResponse } from "@/lib/data/toc-response";
 
 type Props = {
@@ -14,6 +15,8 @@ type Props = {
   currentIndex: number;
   // TOC page that holds the current chapter; fetched the first time the drawer opens.
   initialPage: number;
+  // true when no player island is mounted, so the T key has no other listener
+  ownsKey?: boolean;
 };
 
 type View = { status: "idle" | "loading" | "ready" | "error"; page: number; toc: TocPage | null; error: string | null };
@@ -28,7 +31,7 @@ function isTyping(target: EventTarget | null): boolean {
 }
 
 // Native <dialog> on the left edge. Escape and a click on the backdrop close it; T toggles it.
-export function TocDrawer({ novelId, currentIndex, initialPage }: Props) {
+export function TocDrawer({ novelId, currentIndex, initialPage, ownsKey = false }: Props) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const currentRef = useRef<HTMLLIElement>(null);
   const loadedOnce = useRef(false);
@@ -69,16 +72,22 @@ export function TocDrawer({ novelId, currentIndex, initialPage }: Props) {
     }
   }, [initialPage, load]);
 
+  // T is handled by the player's single keyboard listener, which asks for the drawer with this event. Without a player
+  // (the chapter text is still being fetched) the drawer listens for the key itself; never both.
   useEffect(() => {
+    window.addEventListener(TOGGLE_TOC_EVENT, toggle);
     const onKey = (e: KeyboardEvent) => {
       if (e.key.toLowerCase() !== "t" || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
       if (e.defaultPrevented || isTyping(e.target)) return;
       e.preventDefault();
       toggle();
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [toggle]);
+    if (ownsKey) window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener(TOGGLE_TOC_EVENT, toggle);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [toggle, ownsKey]);
 
   // Bring the current chapter into view once its page is on screen.
   const showingCurrentPage = view.status === "ready" && view.toc?.items.some((i) => i.index === currentIndex);

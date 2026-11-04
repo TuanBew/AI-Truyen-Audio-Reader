@@ -63,3 +63,21 @@ body {
     animation-duration: 0.01ms !important;
   }
 }
+
+/* Reader: the segment being read (the player toggles data-current from audio.currentTime) and a seek that waits for
+   audio still being generated. Segments only look clickable once the player island has taken over. */
+#reader-text[data-interactive] [data-seg] {
+  cursor: pointer;
+}
+
+[data-seg][data-current] {
+  background: var(--highlight);
+  border-radius: 0.2em;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+[data-seg][data-pending] {
+  text-decoration: underline dotted var(--border-strong);
+  text-underline-offset: 0.25em;
+}

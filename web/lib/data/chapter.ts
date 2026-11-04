@@ -33,6 +33,11 @@ export function neighbours(index: number, chapterCount: number): { prevIndex: nu
   };
 }
 
+// The server clock handed to client islands, so their first render matches the server HTML.
+export function serverNowMs(): number {
+  return Date.now();
+}
+
 export function isWorkerOffline(lastSeen: string | null, now: number = Date.now()): boolean {
   if (lastSeen === null) return true;
   const seen = Date.parse(lastSeen);

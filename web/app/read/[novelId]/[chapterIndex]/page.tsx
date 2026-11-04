@@ -5,11 +5,12 @@ import { cache } from "react";
 import { ArrowLeft } from "@phosphor-icons/react/dist/ssr/ArrowLeft";
 import { CaretLeft } from "@phosphor-icons/react/dist/ssr/CaretLeft";
 import { CaretRight } from "@phosphor-icons/react/dist/ssr/CaretRight";
-import { isWorkerOffline, loadFetchJob, loadReaderChapter } from "@/lib/data/chapter";
+import { isWorkerOffline, loadFetchJob, loadReaderChapter, serverNowMs } from "@/lib/data/chapter";
 import { TOC_PAGE_SIZE } from "@/lib/data/novel";
 import { parseChapterIndex, parseSegment, parseUuid } from "@/lib/params";
 import { createClient, getUserId } from "@/lib/supabase/server";
 import { ReaderText } from "./reader-text";
+import { Player } from "./player";
 import { TextWaiter } from "./text-waiter";
 import { TocDrawer } from "./toc-drawer";
 
@@ -87,6 +88,7 @@ export default async function ReaderPage({ params, searchParams }: Props) {
             novelId={novel.id}
             currentIndex={chapter.index}
             initialPage={Math.ceil(chapter.index / TOC_PAGE_SIZE)}
+            ownsKey={chapter.text === null}
           />
           <ChapterLink novelId={novel.id} index={prevIndex} label="Chương trước">
             <CaretLeft size={20} aria-hidden="true" />
@@ -97,10 +99,10 @@ export default async function ReaderPage({ params, searchParams }: Props) {
         </div>
       </header>
 
-      {/* pb-28 leaves room for the player bar that Task 8-11 fixes to the bottom edge. */}
-      <main className="mx-auto max-w-[68ch] pb-28 pt-6 text-[1.125rem]">
+      {/* pb-44 keeps text clear of the fixed player bar (about 6.5 rem) and the banner above it (about 3 rem). */}
+      <main className="mx-auto max-w-[68ch] pb-44 pt-6 text-[1.125rem]">
         {chapter.text !== null ? (
-          <ReaderText text={chapter.text} segments={segments} initialSegment={initialSegment} />
+          <ReaderText text={chapter.text} segments={segments} />
         ) : (
           waiter
         )}
@@ -121,6 +123,21 @@ export default async function ReaderPage({ params, searchParams }: Props) {
           ) : null}
         </nav>
       </main>
+
+      {chapter.text !== null ? (
+        <Player
+          key={chapter.id}
+          chapterId={chapter.id}
+          novelId={novel.id}
+          chapterIndex={chapter.index}
+          snapshot={snapshot}
+          nowMs={serverNowMs()}
+          initialSegment={initialSegment}
+          textChars={chapter.text.length}
+          prevHref={prevIndex === null ? null : `/read/${novel.id}/${prevIndex}`}
+          nextHref={nextIndex === null ? null : `/read/${novel.id}/${nextIndex}`}
+        />
+      ) : null}
     </>
   );
 }
