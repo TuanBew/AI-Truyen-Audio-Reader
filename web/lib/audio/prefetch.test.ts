@@ -92,8 +92,8 @@ describe("prefetchTargets", () => {
     expect(prefetchTargets(input({ jobs }))).toEqual(["c6", "c7"]);
   });
 
-  it("skips chapters without fetched text", () => {
-    expect(prefetchTargets(input({ chapters: chapters(7, { 6: null }) }))).toEqual(["c7"]);
+  it("queues chapters without fetched text: the worker fetches text on synthesize", () => {
+    expect(prefetchTargets(input({ chapters: chapters(7, { 6: null }) }))).toEqual(["c6", "c7"]);
   });
 
   it("is not thrown off by unsorted chapters or chapters outside the window", () => {

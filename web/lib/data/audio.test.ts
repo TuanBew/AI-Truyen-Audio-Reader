@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { describe, expect, it } from "vitest";
+import { generationState } from "@/lib/audio/generation";
 import {
   CHAPTER_NOT_FOUND,
   ENQUEUE_FAILED,
@@ -23,7 +24,7 @@ const cid = (n: number) => `00000000-0000-4000-8000-00000000000${n}`;
 // PostgREST stand-in: select/eq/in/gte/lte/or/order/limit/maybeSingle/head count, insert/update, rpc.
 function fakeSupabase(
   tables: Record<string, Row[]>,
-  opts: { insertErrors?: (DbErr | null)[]; updateError?: DbErr } = {},
+  opts: { insertErrors?: (DbErr | null)[]; updateError?: DbErr; onInsertError?: () => void } = {},
   calls: Call[] = [],
 ) {
   const insertErrors = [...(opts.insertErrors ?? [])];
@@ -119,6 +120,7 @@ function fakeSupabase(
           mode = "insert";
           ops.push(`insert:${JSON.stringify(row)}`);
           writeError = insertErrors.length ? (insertErrors.shift() ?? null) : null;
+          if (writeError) opts.onInsertError?.();
           if (!writeError) {
             inserted = {
               id: `new-${(tables[table] ??= []).length}`,
@@ -382,13 +384,59 @@ describe("ensureAudio", () => {
 
   it("on a racing duplicate returns the live job as a normal snapshot", async () => {
     const tables = base();
-    const supabase = fakeSupabase(tables, {
-      insertErrors: [{ code: "23505", message: "duplicate key" }],
-    });
-    // The racing request's job appears between our insert and the lookup.
-    tables.jobs.push(synthJob("raced", "queued"));
+    const calls: Call[] = [];
+    // The racing request's job appears only when our insert hits the dedupe index, after the snapshot was read.
+    const supabase = fakeSupabase(
+      tables,
+      {
+        insertErrors: [{ code: "23505", message: "duplicate key" }],
+        onInsertError: () => tables.jobs.push(synthJob("raced", "queued")),
+      },
+      calls,
+    );
     const res = await ensureAudio(supabase, USER, cid(1));
+    expect(inserts(calls)).toHaveLength(1); // the failed attempt: the 23505 was consumed
     expect(res.error).toBeNull();
+    expect(res.snapshot?.job?.id).toBe("raced");
+  });
+
+  const partialAudio = () =>
+    audioRow({ status: "partial", duration_ms: null, chunks: [{ key: "c0", start_ms: 0, end_ms: 9981 }] });
+
+  it("enqueues for a partial row whose newest job was cancelled or done, or that has none", async () => {
+    for (const jobs of [[synthJob("c", "cancelled")], [synthJob("d", "done")], []]) {
+      const calls: Call[] = [];
+      await ensureAudio(fakeSupabase(base({ chapter_audio: [partialAudio()], jobs }), {}, calls), USER, cid(1));
+      expect(inserts(calls)).toHaveLength(1);
+    }
+  });
+
+  it("does not enqueue for a partial row with a failed or live job, and exposes the failure", async () => {
+    for (const status of ["queued", "running"]) {
+      const calls: Call[] = [];
+      await ensureAudio(
+        fakeSupabase(base({ chapter_audio: [partialAudio()], jobs: [synthJob("j", status)] }), {}, calls),
+        USER,
+        cid(1),
+      );
+      expect(inserts(calls)).toHaveLength(0);
+    }
+    const calls: Call[] = [];
+    const res = await ensureAudio(
+      fakeSupabase(
+        base({ chapter_audio: [partialAudio()], jobs: [synthJob("f", "failed", { error: "hỏng" })] }),
+        {},
+        calls,
+      ),
+      USER,
+      cid(1),
+    );
+    expect(inserts(calls)).toHaveLength(0);
+    expect(res.snapshot?.job?.status).toBe("failed");
+    expect(res.snapshot && generationState(res.snapshot, Date.now())).toMatchObject({
+      kind: "partial",
+      jobError: { error: "hỏng", jobId: "f" },
+    });
   });
 });
 

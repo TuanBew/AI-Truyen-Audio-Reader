@@ -8,7 +8,7 @@ export type GenState = { workerOnline: boolean } & (
   | { kind: "idle" } // nothing requested yet
   | { kind: "queued"; position: number | null }
   | { kind: "starting" } // job running, no playable audio yet
-  | { kind: "partial"; generatedMs: number } // last chunk end_ms ?? its start_ms
+  | { kind: "partial"; generatedMs: number; jobError: { error: string; jobId: string | null } | null } // generatedMs: last chunk end_ms ?? its start_ms; jobError: the newest job failed after some chunks were written
   | { kind: "ready"; durationMs: number }
   | { kind: "failed"; error: string; jobId: string | null }
 );
@@ -41,7 +41,10 @@ export function generationState(s: AudioSnapshot, nowMs: number): GenState {
     };
   }
   if (audio?.status === "partial" && audio.chunks.length > 0) {
-    return { workerOnline, kind: "partial", generatedMs: lastChunkMs(audio) };
+    // The audio stays playable; a failed newest job is exposed so the UI can offer Thử lại.
+    const jobError =
+      s.job?.status === "failed" ? { error: s.job.error?.trim() || DEFAULT_FAILED_TEXT, jobId: s.job.id } : null;
+    return { workerOnline, kind: "partial", generatedMs: lastChunkMs(audio), jobError };
   }
 
   switch (s.job?.status) {

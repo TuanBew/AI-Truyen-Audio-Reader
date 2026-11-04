@@ -13,15 +13,16 @@ export type PrefetchInput = {
   jobs: { chapter_id: string; status: JobStatus; created_at: string }[]; // synthesize jobs for the current voice hash
 };
 
-// Chapter ids for indexes index+1 .. index+k that need audio. Skipped: chapters that do not exist or have no text
-// yet (nothing to synthesize), chapters with ready audio for their current text, chapters with a queued or running
-// job, and chapters whose newest job failed (spec 5.8, 7.3.1: a failing chapter is not retried on its own).
+// Chapter ids for indexes index+1 .. index+k that need audio. Skipped: chapters that do not exist, chapters with
+// ready audio for their current text, chapters with a queued or running job, and chapters whose newest job failed
+// (spec 5.8, 7.3.1: a failing chapter is not retried on its own). A chapter without text is still queued: the worker
+// fetches text on synthesize (unlike ensureAudio, where the reader has its own explicit text flow).
 export function prefetchTargets({ index, k, chapters, audio, jobs }: PrefetchInput): string[] {
   const out: string[] = [];
   const byIndex = new Map(chapters.map((c) => [c.index, c]));
   for (let i = index + 1; i <= index + k; i++) {
     const chapter = byIndex.get(i);
-    if (!chapter || chapter.text_hash === null) continue;
+    if (!chapter) continue;
 
     const row = audio.find((a) => a.chapter_id === chapter.id) ?? null;
     if (usableAudio(row, chapter.text_hash)?.status === "ready") continue;

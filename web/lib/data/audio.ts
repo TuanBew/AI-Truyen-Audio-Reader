@@ -157,7 +157,12 @@ export async function loadAudioSnapshot(supabase: SupabaseClient, chapterId: str
 export async function ensureAudio(supabase: SupabaseClient, userId: string, chapterId: string): Promise<AudioResult> {
   const snapshot = await loadAudioSnapshot(supabase, chapterId);
   if (!snapshot) return { snapshot: null, error: CHAPTER_NOT_FOUND };
-  if (generationState(snapshot, Date.now()).kind !== "idle") return { snapshot, error: null };
+  const state = generationState(snapshot, Date.now());
+  // A partial row with no live job (cancelled, done or none) would be stuck, so it is queued again; a failed newest
+  // job is left for Thử lại (jobError).
+  const stuckPartial =
+    state.kind === "partial" && (!snapshot.job || ["cancelled", "done"].includes(snapshot.job.status));
+  if (state.kind !== "idle" && !stuckPartial) return { snapshot, error: null };
   if (snapshot.chapterTextHash === null) return { snapshot: null, error: NO_TEXT_TO_SPEAK };
 
   try {

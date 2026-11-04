@@ -101,6 +101,7 @@ describe("generationState", () => {
       workerOnline: true,
       kind: "partial",
       generatedMs: 9981,
+      jobError: null,
     });
   });
 
@@ -116,6 +117,25 @@ describe("generationState", () => {
       kind: "partial",
       generatedMs: 20000,
     });
+  });
+
+  it("keeps partial audio playable after a failed job and exposes the failure", () => {
+    const partial = audio({ status: "partial", chunks: [{ key: "c0", start_ms: 0, end_ms: 9981 }] });
+    expect(generationState(snap({ audio: partial, job: job("failed", "GPU hết bộ nhớ.") }), NOW)).toMatchObject({
+      kind: "partial",
+      generatedMs: 9981,
+      jobError: { error: "GPU hết bộ nhớ.", jobId: "j1" },
+    });
+    expect(generationState(snap({ audio: partial, job: job("failed") }), NOW)).toMatchObject({
+      jobError: { error: DEFAULT_FAILED_TEXT, jobId: "j1" },
+    });
+  });
+
+  it("has no jobError for partial audio with a queued, running, cancelled or done job", () => {
+    const partial = audio({ status: "partial", chunks: [{ key: "c0", start_ms: 0, end_ms: 9981 }] });
+    for (const status of ["queued", "running", "cancelled", "done"] as const) {
+      expect(generationState(snap({ audio: partial, job: job(status) }), NOW)).toMatchObject({ jobError: null });
+    }
   });
 
   it("ignores partial audio of a different text", () => {
