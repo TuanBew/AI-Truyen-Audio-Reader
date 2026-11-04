@@ -314,7 +314,10 @@ export class MsePlayerEngine {
           continue;
         }
         if (failures >= this.retryDelaysMs.length) {
-          this.fatal("network");
+          // A failed fetch (a CORS-blocked R2 request is a TypeError) says nothing about the full file, which an
+          // <audio src> loads without CORS: try it before giving up.
+          if (this.manifest?.full != null) void this.fallbackOrFatal();
+          else this.fatal("network");
           return null;
         }
         await sleep(this.retryDelaysMs[failures++]!, this.abort.signal);

@@ -167,6 +167,25 @@ describe("MsePlayerEngine", () => {
     expect(deadCalls).toBe(3); // the first try plus exactly 2 retries, then no more
   });
 
+  it("(c4) falls back to full.webm when the cluster fetch keeps failing (CORS or network)", async () => {
+    const full = await fullFileUrl();
+    let deadCalls = 0;
+    const dead = async (url: string) => {
+      if (url.includes("seg-0001")) {
+        deadCalls++;
+        throw new TypeError("Failed to fetch");
+      }
+      return fetchFixture(url);
+    };
+    engine = new MsePlayerEngine(audio, events, { fetchBytes: dead, retryDelaysMs: [1, 1] });
+    engine.load(fixtureManifest({ full }));
+    await waitFor(() => audio.src === full, "full file after exhausted retries");
+    await waitFor(() => audio.readyState >= 1, "full file metadata");
+    expect(events.fatals).toEqual([]);
+    expect(events.fallbacks).toBe(1);
+    expect(deadCalls).toBe(3);
+  });
+
   it("(d) falls back to full.webm on a corrupt chunk", async () => {
     const full = await fullFileUrl();
     const corrupt = async (url: string) =>

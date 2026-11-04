@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { copyCookies } from "@/lib/auth/cookies";
 import { authDecision } from "@/lib/auth/paths";
 import { publicEnv } from "@/lib/env";
 
@@ -25,16 +26,19 @@ export async function proxy(request: NextRequest) {
 
   switch (authDecision(pathname, signedIn)) {
     case "unauthorized":
-      return NextResponse.json({ error: "Phiên đăng nhập đã hết. Tải lại trang để đăng nhập." }, { status: 401 });
+      return copyCookies(
+        response,
+        NextResponse.json({ error: "Phiên đăng nhập đã hết. Tải lại trang để đăng nhập." }, { status: 401 }),
+      );
     case "login": {
       const url = request.nextUrl.clone();
       url.pathname = "/login";
       url.search = "";
       url.searchParams.set("next", pathname + search);
-      return NextResponse.redirect(url);
+      return copyCookies(response, NextResponse.redirect(url));
     }
     case "home":
-      return NextResponse.redirect(new URL("/", request.url));
+      return copyCookies(response, NextResponse.redirect(new URL("/", request.url)));
     case "next":
       break;
   }

@@ -11,6 +11,7 @@ import { parseChapterIndex, parseSegment, parseUuid } from "@/lib/params";
 import { createClient, getUserId } from "@/lib/supabase/server";
 import { ReaderText } from "./reader-text";
 import { Player } from "./player";
+import { SegmentWaiter } from "./segment-waiter";
 import { TextWaiter } from "./text-waiter";
 import { TocDrawer } from "./toc-drawer";
 
@@ -62,9 +63,13 @@ export default async function ReaderPage({ params, searchParams }: Props) {
   const initialSegment = parseSegment(Array.isArray(rawSeg) ? rawSeg[0] : rawSeg) ?? resumeSegment;
 
   let waiter: React.ReactNode = null;
+  // The text is saved before the analysis, so a refresh can see text without segments while the fetch_chapter job
+  // is still running: keep polling until the segments (or the end of the job) arrive.
+  const needsJob = chapter.text === null || segments.length === 0;
+  const userId = needsJob ? await getUserId() : null;
+  const job = userId ? await loadFetchJob(await createClient(), userId, chapter.id) : null;
+  const segmentsPending = chapter.text !== null && segments.length === 0 && (job?.status === "queued" || job?.status === "running");
   if (chapter.text === null) {
-    const userId = await getUserId();
-    const job = userId ? await loadFetchJob(await createClient(), userId, chapter.id) : null;
     waiter = (
       <TextWaiter
         chapterId={chapter.id}
@@ -126,9 +131,11 @@ export default async function ReaderPage({ params, searchParams }: Props) {
         </nav>
       </main>
 
+      {segmentsPending ? <SegmentWaiter jobId={job!.id} status={job!.status} /> : null}
+
       {chapter.text !== null ? (
         <Player
-          key={chapter.id}
+          key={`${chapter.id}:${segments.length > 0 ? "seg" : "plain"}`}
           chapterId={chapter.id}
           novelId={novel.id}
           chapterIndex={chapter.index}
