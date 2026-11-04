@@ -475,6 +475,20 @@ Command palette (`Ctrl+K`): search library and chapters, run commands, paste a t
 - Edge TTS fallback: `GET /api/fallback-tts?chapterId=&segment=` streams MP3 for one segment; player plays segments sequentially with a plain `<audio>` element; single voice; nothing persisted.
 - Spike S2 outcome (validated in the Claude desktop browser pane, Chromium 152; owner's browser unrecorded; Edge/Firefox untested): independently encoded WebM chunks clicked audibly at boundaries in both `sequence` mode and `segments` mode with offsets + append windows, so they are rejected. Shared-init cluster segments from one continuous encode played with no click at any boundary (sine and speech) and are the chosen design. C was produced by a one-shot offline encode; the incremental pipe encode is validated in M2 (8).
 
+### 6.5.1 M3 implementation notes (2026-11-04)
+
+Choices made in M3 where the sections above left room or were narrowed. Plan: `docs/superpowers/plans/2026-11-03-m3-web-core.md`.
+
+- Synthesis and prefetch (5.8) start on the first play in a chapter, not on open, so browsing costs no GPU time or R2 storage. Prefetch enqueues `synthesize` only: the worker fetches missing text itself. A chapter opened without text enqueues `fetch_chapter`.
+- The TOC is paginated server-side (100 per page, `?trang=`), not virtualized, so the novel page ships no list JavaScript. The reader drawer fetches the same pages from `GET /api/novels/[id]/toc`.
+- TanStack Query, Zustand, motion and Radix/shadcn (6.1) are not used yet: drawers are native `<dialog>` and player state is a small external store, because the empty-page baseline was already 132 KB gzip of the 150 KB budget. M5 adds them only if a feature needs them.
+- Chapter text is server-rendered with one `<span data-seg data-kind>` per segment; the player highlights by toggling `data-current` from a rAF loop without React renders.
+- Covers use `next/image` with `unoptimized`, since Vercel's optimizer would fetch from a datacenter IP (2.1). Measured on 2026-11-03: `static.truyenfull.live` answers 403 to browser hotlinks, so covers currently show a placeholder; caching them through the worker is a follow-up.
+- Signed URLs use a `X-Amz-Date` floored to 5 minutes with `X-Amz-Expires=600`, so a key signed twice in one window gives the same URL and the immutable browser cache applies; every URL stays valid for at least 5 minutes after it is handed out.
+- `jobs` also has partial unique indexes deduping live `fetch_chapter` (per chapter) and `fetch_novel` (per URL) jobs (migration `20261103000100`), alongside the rate limiter `api_rate_limit_hit` and the `web_vitals` table written through `record_web_vitals`.
+- Web Vitals are stored in M3; Settings → Worker shows them in M5. Lighthouse in M3 runs on a local production build; M6 repeats it on Vercel.
+- Partial audio with a failed job stays playable up to the generated range and shows the error with "Thử lại" (7.2).
+
 ### 6.6 Settings pages
 
 - Giao diện: theme presets, seed editor, contrast readout, reading typography, import/export.

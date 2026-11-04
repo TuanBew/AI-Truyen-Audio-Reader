@@ -48,6 +48,12 @@ Web, from `web/`:
 
     npm install
     npm run dev | npm run lint | npm run typecheck | npm test | npm run build
+    npm run test:browser          # MSE engine, player controller and AudioWorklet continuity tests in real Chromium (once: npx playwright install chromium)
+    npm run check:bundle          # first-load JS per route against the budgets; run after build
+
+`web/.env.local` (copy `.env.local.example`) holds the Supabase URL and anon key plus the read-only R2 values for the signed-URL route. Local values come from `npx --yes supabase@2.121.0 status -o env`. `bash scripts/local-dev-user.sh` creates the local-only test user `dev@audiotruyen.test` / `local-dev-password` (it refuses any non-local API URL).
+
+The player fixture `web/tests/fixtures/sine-25s/` comes from the production encoder: from `worker/`, `uv run python scripts/make_player_fixture.py --out ../web/tests/fixtures/sine-25s`.
 
 ## Rules
 
@@ -58,6 +64,8 @@ Web, from `web/`:
 - Cost and abuse protection requirements are in spec 7.3.1 and bind every change touching R2, Vercel or Edge TTS.
 - Scraping goes through `sources/http.py` `PoliteClient` only (1.0-1.5 s spacing, allowed hosts); never add code that solves or bypasses Cloudflare challenges.
 - Every R2 upload goes through `storage/guard.py` `GuardedStorage.put` (kill switch, byte and PUT caps, ledger); never call `R2Storage.put_bytes` for audio directly.
+- `lib/player/engine` and `lib/supabase/browser` are imported only with dynamic `import()` (ESLint enforces it); client islands never import `lib/data/*` (server-only), shared values live in `lib/reader/shared.ts`.
+- Route handlers that reach R2 are authenticated and rate limited through `api_rate_limit_hit`; buckets and limits are fixed in SQL.
 
 ## Database rules
 
