@@ -3,6 +3,8 @@ import { generationState, type GenState } from "@/lib/audio/generation";
 import type { AudioResult } from "@/lib/data/audio";
 import type { EngineEvents } from "@/lib/player/engine"; // type only: the engine is loaded with import() on first play
 import type { AudioManifest, AudioSnapshot, TimedSegment } from "@/lib/types";
+import { createProgressSaver, type ProgressBody, type ProgressSaver } from "@/lib/progress/saver";
+import { sendProgress as httpSendProgress } from "@/lib/progress/send";
 import { needsManifest, playableAudio } from "./snapshot";
 import { readPersisted, stepRate, type PlayerStore } from "./store";
 import { segmentAt, startOfSegment } from "./timeline";
@@ -37,6 +39,7 @@ export type ControllerDeps = {
     refreshManifest: () => Promise<AudioManifest>,
   ) => Promise<EngineLike>;
   loadClient?: () => Promise<SupabaseClient>;
+  sendProgress?: (body: ProgressBody, beacon: boolean) => void;
 };
 
 export type ControllerOptions = {
@@ -49,6 +52,10 @@ export type ControllerOptions = {
   actions: PlayerActions;
   now?: () => number;
   deps?: ControllerDeps;
+  // Where a finished chapter goes next (with ?autoplay=1), or null on the newest chapter. navigate must be the App
+  // Router's push so the page keeps its user activation.
+  nextHref?: string | null;
+  navigate?: (href: string) => void;
 };
 
 export const SNAPSHOT_DEBOUNCE_MS = 500;
@@ -69,7 +76,8 @@ export const TEXT_NO_MSE_PARTIAL = "Trình duyệt này chưa phát được ch�
 export const TEXT_RATE_LIMITED = "Tải âm thanh quá nhanh. Sẽ tự thử lại sau 30 giây.";
 export const TEXT_SESSION_ENDED = "Phiên đăng nhập đã hết. Tải lại trang để đăng nhập.";
 export const TEXT_RELOAD_PAGE = "Không tải được âm thanh. Tải lại trang rồi thử lại.";
-export const TEXT_AUTOPLAY = "Trình duyệt chặn tự phát. Bấm phát để nghe.";
+export const TEXT_AUTOPLAY = "Trình duyệt chặn tự phát. Bấm phát để nghe tiếp.";
+export const TEXT_LAST_CHAPTER = "Đã hết chương mới nhất.";
 const TEXT_ENSURE_FAILED = "Không yêu cầu được tạo âm thanh. Thử lại sau ít phút.";
 
 export class ManifestError extends Error {
@@ -133,6 +141,9 @@ export class PlayerController {
   private readonly deps: Required<ControllerDeps>;
   private readonly article: HTMLElement | null;
   private readonly cleanups: (() => void)[] = [];
+  private readonly saver: ProgressSaver;
+  private readonly nextHref: string | null;
+  private readonly navigate: (href: string) => void;
 
   private destroyed = false;
   private started = false;
@@ -142,6 +153,8 @@ export class PlayerController {
   private plain = false; // no MediaSource: playing the full file directly
   private unlocked = false;
   private softError = false; // store.error is informational (rate limit) and clears by itself
+  private listened = false; // real listening happened (sound played or the user moved): only then is progress saved
+  private finishedSent = false; // the chapter end was saved; nothing may overwrite it afterwards
 
   private snapshot: AudioSnapshot;
   private gen: GenState;
@@ -194,7 +207,17 @@ export class PlayerController {
       fetchManifest: opts.deps?.fetchManifest ?? httpManifest,
       createEngine: opts.deps?.createEngine ?? defaultCreateEngine,
       loadClient: opts.deps?.loadClient ?? defaultLoadClient,
+      sendProgress: opts.deps?.sendProgress ?? httpSendProgress,
     };
+    this.nextHref = opts.nextHref ?? null;
+    this.navigate = opts.navigate ?? (() => {});
+    this.saver = createProgressSaver((body, beacon) => {
+      try {
+        this.deps.sendProgress(body, beacon);
+      } catch {
+        // a lost save never stops playback or the auto-advance
+      }
+    });
     this.snapshot = opts.snapshot;
     this.gen = this.store.getState().gen;
     this.timed = sortedTimings(opts.snapshot);
@@ -262,6 +285,7 @@ export class PlayerController {
     this.wantPlay = false;
     this.store.setState({ loading: false });
     this.audio.pause();
+    this.saveNow(false); // the element's own pause event is asynchronous; the position is valid now
   }
 
   toggle(): void {
@@ -370,7 +394,8 @@ export class PlayerController {
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
-    // Task 11: flush the reading progress here, before anything is torn down.
+    this.saveNow(false); // before anything is torn down: the playhead is still valid
+    this.saver.dispose();
     this.stopRaf();
     for (const t of [this.mTimer, this.sTimer]) if (t) clearTimeout(t);
     if (this.clockTimer) clearInterval(this.clockTimer);
@@ -901,6 +926,7 @@ export class PlayerController {
       this.cleanups.push(() => a.removeEventListener(type, fn));
     };
     on("playing", () => {
+      this.listened = true;
       this.softError = false;
       this.store.setState({ playing: true, loading: false, error: null });
       this.startRaf();
@@ -909,26 +935,75 @@ export class PlayerController {
       // Also the OS media keys or a headset: whoever paused, the intent to play is over (unless the controller is
       // swapping the source for a new attempt, which resumes by itself).
       this.stopRaf();
+      if (this.audio.ended) {
+        // The element pauses itself just before "ended"; that handler decides what the end means.
+        this.store.setState({ playing: false });
+        return;
+      }
       if (this.now() < this.reloadingUntil) {
         this.store.setState({ playing: false }); // our own pause (unlock, reload): the intent to play stands
         return;
       }
       this.wantPlay = false;
       this.store.setState({ playing: false, loading: false });
+      this.saveNow(false);
     });
     on("waiting", () => {
       if (this.wantPlay) this.store.setState({ loading: true });
     });
-    on("ended", () => {
-      this.wantPlay = false;
-      this.stopRaf();
-      this.store.setState({ playing: false, loading: false });
-    });
+    on("ended", () => this.onEnded());
     on("timeupdate", () => this.onTime());
     on("seeked", () => this.onTime());
     on("error", () => {
       if (this.plain) this.fail(TEXT_NETWORK); // the engine watches the element itself when MSE is in use
     });
+  }
+
+  // The playhead reached the end of the file. Only a ready row is a finished chapter: on a partial row the element can
+  // only get here by catching up with generation (the engine ends the stream when the row is ready), so keep waiting.
+  private onEnded(): void {
+    this.stopRaf();
+    if (this.gen.kind !== "ready") {
+      this.store.setState({ playing: false, loading: this.wantPlay });
+      return;
+    }
+    this.wantPlay = false;
+    this.store.setState({ playing: false, loading: false });
+    this.finishChapter();
+    if (this.nextHref !== null) {
+      this.navigate(this.nextHref); // regardless of the save: a failed save must not trap the listener
+    } else {
+      this.softError = true; // the next play clears it
+      this.store.setState({ error: TEXT_LAST_CHAPTER, canRetry: false });
+    }
+  }
+
+  private finishChapter(): void {
+    if (this.finishedSent || !this.listened) return;
+    this.finishedSent = true;
+    const last = this.segOrder[this.segOrder.length - 1];
+    const segmentIndex = this.curSeg ?? last ?? 0;
+    this.saver.update(this.progressBody(segmentIndex, true));
+    this.saver.flush(false);
+  }
+
+  private progressBody(segmentIndex: number, finished: boolean): ProgressBody {
+    return {
+      novelId: this.novelId,
+      chapterId: this.chapterId,
+      segmentIndex,
+      positionMs: Math.max(0, Math.round(this.audio.currentTime * 1000)),
+      finished,
+    };
+  }
+
+  // Saves where the listener is now (pause, hidden page, pagehide, destroy). Nothing is saved before real listening
+  // (opening a chapter must not overwrite the resume position of the one listened to last), without a current segment,
+  // or after the chapter end was saved.
+  private saveNow(beacon: boolean): void {
+    if (!this.listened || this.finishedSent || this.curSeg === null) return;
+    this.saver.update(this.progressBody(this.curSeg, false));
+    this.saver.flush(beacon);
   }
 
   private onTime(): void {
@@ -970,6 +1045,9 @@ export class PlayerController {
     const el = this.spans.get(seg);
     el?.setAttribute("data-current", "");
     this.store.setState({ currentSeg: seg });
+    // Only playback and explicit seeks get here (the initial ?seg= highlight does not), so this is real listening.
+    this.listened = true;
+    if (!this.finishedSent) this.saver.update(this.progressBody(seg, false));
     if (el && this.store.getState().follow) this.scrollToEl(el, false);
   }
 
@@ -1028,6 +1106,11 @@ export class PlayerController {
         if (Number.isInteger(i)) this.play(i);
       });
     }
+
+    listen(window, "pagehide", () => this.saveNow(true));
+    listen(document, "visibilitychange", () => {
+      if (document.visibilityState === "hidden") this.saveNow(false);
+    });
 
     // Scrolling the user did (not the controller's own scrollTo) turns following off.
     const manual = () => {

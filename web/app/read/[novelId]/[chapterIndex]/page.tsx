@@ -16,7 +16,7 @@ import { TocDrawer } from "./toc-drawer";
 
 type Props = {
   params: Promise<{ novelId: string; chapterIndex: string }>;
-  searchParams: Promise<{ seg?: string | string[] }>;
+  searchParams: Promise<{ seg?: string | string[]; autoplay?: string | string[] }>;
 };
 
 const FOCUS_RING = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus)]";
@@ -56,7 +56,9 @@ export default async function ReaderPage({ params, searchParams }: Props) {
   if (!data) notFound();
   const { novel, chapter, segments, snapshot, resumeSegment, prevIndex, nextIndex } = data;
 
-  const rawSeg = (await searchParams).seg;
+  const query = await searchParams;
+  const rawSeg = query.seg;
+  const autoplay = (Array.isArray(query.autoplay) ? query.autoplay[0] : query.autoplay) === "1";
   const initialSegment = parseSegment(Array.isArray(rawSeg) ? rawSeg[0] : rawSeg) ?? resumeSegment;
 
   let waiter: React.ReactNode = null;
@@ -134,6 +136,7 @@ export default async function ReaderPage({ params, searchParams }: Props) {
           nowMs={serverNowMs()}
           initialSegment={initialSegment}
           textChars={chapter.text.length}
+          autoplay={autoplay}
           prevHref={prevIndex === null ? null : `/read/${novel.id}/${prevIndex}`}
           nextHref={nextIndex === null ? null : `/read/${novel.id}/${nextIndex}`}
         />

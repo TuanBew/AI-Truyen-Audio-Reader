@@ -34,6 +34,8 @@ type Props = {
   textChars: number;
   prevHref: string | null;
   nextHref: string | null;
+  // Arrived by auto-advance (?autoplay=1): start playing on mount.
+  autoplay: boolean;
 };
 
 const FOCUS_RING = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus)]";
@@ -87,8 +89,20 @@ export function Player(props: Props) {
       initialSegment: p.initialSegment,
       store,
       actions: { ensureChapterAudio, readAudioSnapshot, retrySynthesis, prefetchAfter },
+      // App Router client navigation, so the user's activation carries over and the next chapter may play at once.
+      nextHref: p.nextHref ? `${p.nextHref}?autoplay=1` : null,
+      navigate: (href) => router.push(href),
     });
     ctl.current = controller;
+    if (p.autoplay) {
+      controller.play(); // a rejection (no activation) leaves the play button with TEXT_AUTOPLAY
+      // So that a reload of this page does not start playing again.
+      const url = new URL(window.location.href);
+      if (url.searchParams.has("autoplay")) {
+        url.searchParams.delete("autoplay");
+        window.history.replaceState(window.history.state, "", url);
+      }
+    }
     return () => {
       controller.destroy();
       ctl.current = null;

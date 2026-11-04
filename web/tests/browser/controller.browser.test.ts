@@ -5,6 +5,7 @@ import {
   ManifestError,
   PlayerController,
   TEXT_AUTOPLAY,
+  TEXT_LAST_CHAPTER,
   TEXT_RELOAD_PAGE,
   TEXT_SESSION_ENDED,
   type ControllerDeps,
@@ -13,6 +14,7 @@ import {
 } from "@/lib/player/controller";
 import type { EngineEvents } from "@/lib/player/engine";
 import { createPlayerStore, type PlayerStore } from "@/lib/player/store";
+import type { ProgressBody } from "@/lib/progress/saver";
 import type { AudioChunk, AudioManifest, AudioRow, AudioSnapshot, JobRow, TimedSegment } from "@/lib/types";
 import { FIXTURE_CHUNKS, FIXTURE_DURATION_MS, fixtureManifest, waitFor } from "./fixture";
 
@@ -152,7 +154,13 @@ let made: PlayerController[];
 
 function make(
   snapshot: AudioSnapshot,
-  over: { actions?: Partial<PlayerActions>; deps?: ControllerDeps; initialSegment?: number | null } = {},
+  over: {
+    actions?: Partial<PlayerActions>;
+    deps?: ControllerDeps;
+    initialSegment?: number | null;
+    nextHref?: string | null;
+    sendProgress?: (body: ProgressBody, beacon: boolean) => void;
+  } = {},
 ) {
   const store: PlayerStore = createPlayerStore({ gen: generationState(snapshot, Date.now()) });
   const actions: PlayerActions = {
@@ -172,6 +180,8 @@ function make(
     },
     ...over.deps,
   };
+  const sendProgress = vi.fn(over.sendProgress ?? (() => {}));
+  const navigate = vi.fn();
   const ctl = new PlayerController({
     chapterId: CH,
     novelId: "n",
@@ -180,10 +190,12 @@ function make(
     initialSegment: over.initialSegment ?? null,
     store,
     actions,
-    deps,
+    deps: { ...deps, sendProgress },
+    nextHref: over.nextHref ?? null,
+    navigate,
   });
   made.push(ctl);
-  return { ctl, store, actions, fc, engine };
+  return { ctl, store, actions, fc, engine, sendProgress, navigate };
 }
 
 beforeEach(() => {
@@ -658,6 +670,141 @@ describe("autoplay", () => {
     (ctl as unknown as { softError: boolean }).softError = true;
     await audios[audios.length - 1]!.play();
     await waitFor(() => store.getState().playing, "playing again");
+    expect(store.getState().error).toBeNull();
+  });
+});
+
+describe("progress, chapter end and auto-advance", () => {
+  const STARTS = [0, 10_000, 20_000];
+  const lastAudio = () => audios[audios.length - 1]!;
+  const NEXT = "/read/n/2?autoplay=1";
+  const startReal = (over: Parameters<typeof make>[1] = {}, snapshot = fixtureSnap(1, STARTS)) =>
+    make(snapshot, { ...over, deps: { fetchManifest: async () => fixtureManifest(), createEngine: undefined } });
+
+  it("opening a chapter, and destroying it unplayed, saves nothing", async () => {
+    const { ctl, sendProgress } = startReal({ initialSegment: 2 });
+    ctl.destroy();
+    expect(sendProgress).not.toHaveBeenCalled();
+  });
+
+  it("a seek is saved when the user pauses, with the segment and the position", async () => {
+    const { ctl, store, sendProgress } = startReal();
+    ctl.play();
+    await waitFor(() => store.getState().playing, "playing");
+    ctl.seekToSegment(2);
+    await waitFor(() => lastAudio().currentTime >= 19.9, "seek to segment 2");
+    expect(sendProgress).not.toHaveBeenCalled(); // debounced
+    ctl.pause();
+    expect(sendProgress).toHaveBeenCalledTimes(1);
+    const [body, beacon] = sendProgress.mock.calls[0]!;
+    expect(beacon).toBe(false);
+    expect(body).toMatchObject({ novelId: "n", chapterId: CH, segmentIndex: 2, finished: false });
+    expect(body.positionMs).toBeGreaterThanOrEqual(19_900);
+  });
+
+  it("a segment change is saved by itself after the 2 s debounce", async () => {
+    const { ctl, store, sendProgress } = startReal();
+    ctl.play();
+    await waitFor(() => store.getState().playing, "playing");
+    ctl.seekToSegment(1);
+    await waitFor(() => store.getState().currentSeg === 1, "segment 1");
+    await waitFor(() => sendProgress.mock.calls.length > 0, "debounced save");
+    expect(sendProgress.mock.calls.at(-1)![0].segmentIndex).toBe(1);
+  });
+
+  it("pagehide flushes with the beacon flag, and destroy flushes too", async () => {
+    const { ctl, store, sendProgress } = startReal();
+    ctl.play();
+    await waitFor(() => store.getState().playing, "playing");
+    ctl.seekToSegment(1);
+    await waitFor(() => lastAudio().currentTime >= 9.9, "seek to segment 1");
+    window.dispatchEvent(new Event("pagehide"));
+    expect(sendProgress).toHaveBeenCalledTimes(1);
+    expect(sendProgress.mock.calls[0]![1]).toBe(true);
+    expect(sendProgress.mock.calls[0]![0].segmentIndex).toBe(1);
+
+    ctl.seekToSegment(2);
+    await waitFor(() => lastAudio().currentTime >= 19.9, "seek to segment 2");
+    ctl.destroy();
+    expect(sendProgress).toHaveBeenCalledTimes(2);
+    expect(sendProgress.mock.calls[1]![0].segmentIndex).toBe(2);
+  });
+
+  it("the page going hidden flushes", async () => {
+    const { ctl, store, sendProgress } = startReal();
+    ctl.play();
+    await waitFor(() => store.getState().playing, "playing");
+    ctl.seekToSegment(1);
+    await waitFor(() => lastAudio().currentTime >= 9.9, "seek to segment 1");
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(sendProgress).toHaveBeenCalledTimes(1);
+  });
+
+  it("a position with no current segment is not saved", async () => {
+    const { ctl, store, sendProgress } = startReal({}, fixtureSnap(1, []));
+    ctl.play();
+    await waitFor(() => store.getState().playing, "playing");
+    expect(store.getState().currentSeg).toBeNull();
+    ctl.pause();
+    ctl.destroy();
+    expect(sendProgress).not.toHaveBeenCalled();
+  });
+
+  it("the end of a ready chapter saves finished and navigates to the next one", async () => {
+    const { ctl, store, sendProgress, navigate } = startReal({ nextHref: NEXT });
+    ctl.play();
+    await waitFor(() => store.getState().playing, "playing");
+    ctl.seekToMs(FIXTURE_DURATION_MS - 1500);
+    await waitFor(() => navigate.mock.calls.length > 0, "auto-advance after the real ended event");
+    expect(navigate).toHaveBeenCalledWith(NEXT);
+    const finished = sendProgress.mock.calls.filter(([b]) => b.finished);
+    expect(finished).toHaveLength(1);
+    expect(finished[0]![0]).toMatchObject({ chapterId: CH, segmentIndex: 2, finished: true });
+    expect(finished[0]![1]).toBe(false);
+    ctl.destroy();
+    expect(sendProgress.mock.calls.filter(([b]) => b.finished)).toHaveLength(1); // destroy does not resend
+    expect(sendProgress.mock.calls.at(-1)![0].finished).toBe(true); // and nothing overwrites it
+  });
+
+  it("a failed save never stops the auto-advance", async () => {
+    const { ctl, store, navigate } = startReal({
+      nextHref: NEXT,
+      sendProgress: () => {
+        throw new Error("save failed");
+      },
+    });
+    ctl.play();
+    await waitFor(() => store.getState().playing, "playing");
+    ctl.seekToMs(FIXTURE_DURATION_MS - 1500);
+    await waitFor(() => navigate.mock.calls.length > 0, "auto-advance");
+  });
+
+  it("the last chapter shows the end message through the banner error and does not navigate", async () => {
+    const { ctl, store, sendProgress, navigate } = startReal({ nextHref: null });
+    ctl.play();
+    await waitFor(() => store.getState().playing, "playing");
+    ctl.seekToMs(FIXTURE_DURATION_MS - 1500);
+    await waitFor(() => store.getState().error === TEXT_LAST_CHAPTER, "end message");
+    expect(TEXT_LAST_CHAPTER).toBe("Đã hết chương mới nhất.");
+    expect(navigate).not.toHaveBeenCalled();
+    expect(sendProgress.mock.calls.some(([b]) => b.finished)).toBe(true);
+    ctl.play(); // listening again clears the message
+    await waitFor(() => store.getState().playing, "playing again");
+    expect(store.getState().error).toBeNull();
+  });
+
+  it("ended on a partial row is not a finished chapter: nothing saved as finished, no navigation", async () => {
+    const { ctl, store, sendProgress, navigate } = startReal({ nextHref: NEXT }, fixtureSnap(1, STARTS, "partial"));
+    ctl.play();
+    await waitFor(() => store.getState().playing, "playing");
+    ctl.seekToSegment(1);
+    await waitFor(() => lastAudio().currentTime >= 9.9, "seek");
+    lastAudio().dispatchEvent(new Event("ended")); // playback caught up with generation
+    expect(store.getState().loading).toBe(true); // still waiting for more audio (the real element plays on, so check at once)
+    await new Promise((r) => setTimeout(r, 50));
+    expect(navigate).not.toHaveBeenCalled();
+    expect(sendProgress.mock.calls.some(([b]) => b.finished)).toBe(false);
     expect(store.getState().error).toBeNull();
   });
 });
