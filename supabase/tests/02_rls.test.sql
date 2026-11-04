@@ -28,7 +28,7 @@ select throws_ok(
   $$insert into public.chapter_audio (user_id, chapter_id, voice_hash) values ('11111111-1111-1111-1111-111111111111', 'cccccccc-0000-0000-0000-000000000001', 'h2')$$,
   '42501', null, 'owner cannot write chapter_audio'
 );
-select ok((select count(*) from public.worker_status) = 1, 'owner reads worker_status');
+select ok(exists (select 1 from public.worker_status where worker_id = 'laptop'), 'owner reads worker_status');
 select throws_ok(
   $$insert into public.worker_status (worker_id) values ('x')$$,
   '42501', null, 'owner cannot write worker_status'

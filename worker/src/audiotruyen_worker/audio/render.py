@@ -60,7 +60,8 @@ class RenderResult:
 
 
 Uploader = Callable[[str, bytes, str], int]
-Progress = Callable[[str, list[dict]], bool]  # (init_key, chunks) -> still own the attempt?
+# (init_key, chunks, timings so far: a snapshot copy) -> still own the attempt?
+Progress = Callable[[str | None, list[dict], dict[int, tuple[int, int]]], bool]
 
 
 def _audible(audio: np.ndarray) -> bool:
@@ -154,6 +155,8 @@ class ChapterRenderer:
         uploaded: list[bytes] = []
         state: dict = {"init_key": None, "chunks": [], "error": None}
         stop = threading.Event()
+        timings: dict[int, tuple[int, int]] = {}
+        timings_lock = threading.Lock()  # the writer records spans, the uploader snapshots them
 
         def fail(exc: BaseException) -> None:
             if state["error"] is None:  # keep the first cause, not the kill's aftermath
@@ -176,7 +179,9 @@ class ChapterRenderer:
             if chunks:
                 chunks[-1]["end_ms"] = segment.timestamp_ms
             chunks.append({"key": key, "start_ms": segment.timestamp_ms, "end_ms": None})
-            if not self._on_progress(state["init_key"], chunks):
+            with timings_lock:
+                snapshot = dict(timings)
+            if not self._on_progress(state["init_key"], chunks, snapshot):
                 raise AttemptSuperseded()
 
         def upload_loop() -> None:
@@ -196,7 +201,6 @@ class ChapterRenderer:
 
         uploader = threading.Thread(target=upload_loop, name="audio-uploader", daemon=True)
         uploader.start()
-        timings: dict[int, tuple[int, int]] = {}
         samples = 0
         failed = streak = 0
         try:
@@ -216,13 +220,15 @@ class ChapterRenderer:
                 else:
                     pcm, speech_len = finish_segment(audio, plan.emotion, plan.paragraph_end)
                 start_ms = round(samples * 1000 / SAMPLE_RATE)
-                timings[plan.i] = (start_ms, round((samples + speech_len) * 1000 / SAMPLE_RATE))
+                end_ms = round((samples + speech_len) * 1000 / SAMPLE_RATE)
                 try:
                     encoder.write(pcm)
                 except EncoderError:
                     if stop.is_set():  # the uploader stopped the encoder; its error wins below
                         break
                     raise
+                with timings_lock:  # only segments already written to the encoder are reported
+                    timings[plan.i] = (start_ms, end_ms)
                 samples += len(pcm)
             if not stop.is_set():
                 if failed > MAX_FAILED_FRACTION * len(plans):
@@ -247,7 +253,7 @@ class ChapterRenderer:
             chunks=state["chunks"],
             full_key=full_key,
             duration_ms=duration_ms,
-            timings=timings,
+            timings=dict(timings),
             warnings=self._warnings,
         )
 

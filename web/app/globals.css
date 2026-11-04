@@ -9,8 +9,11 @@
   --text: #15191d;
   --text-muted: #525c66;
   --border: #d5dade;
+  --border-strong: #b7bec5;
   --accent: #1f6f78;
   --accent-contrast: #f5fafa;
+  --highlight: #fbe7a6;
+  --highlight-word: #f3cf5b;
   --focus: #1f6f78;
 }
 
@@ -23,8 +26,11 @@
     --text: #e3e6e9;
     --text-muted: #9aa3ad;
     --border: #2b3238;
+    --border-strong: #3d464e;
     --accent: #6bb8c0;
     --accent-contrast: #0c1a1c;
+    --highlight: #3a3418;
+    --highlight-word: #5c5020;
     --focus: #6bb8c0;
   }
 }
@@ -36,8 +42,11 @@
   --color-text: var(--text);
   --color-text-muted: var(--text-muted);
   --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
   --color-accent: var(--accent);
   --color-accent-contrast: var(--accent-contrast);
+  --color-highlight: var(--highlight);
+  --color-highlight-word: var(--highlight-word);
   --font-sans: var(--font-be-vietnam), system-ui, sans-serif;
 }
 
@@ -53,4 +62,22 @@ body {
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;
   }
+}
+
+/* Reader: the segment being read (the player toggles data-current from audio.currentTime) and a seek that waits for
+   audio still being generated. Segments only look clickable once the player island has taken over. */
+#reader-text[data-interactive] [data-seg] {
+  cursor: pointer;
+}
+
+[data-seg][data-current] {
+  background: var(--highlight);
+  border-radius: 0.2em;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+[data-seg][data-pending] {
+  text-decoration: underline dotted var(--border-strong);
+  text-underline-offset: 0.25em;
 }

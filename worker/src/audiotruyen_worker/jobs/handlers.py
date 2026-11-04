@@ -138,6 +138,7 @@ def make_handlers(
             # readable while the rest of a long table of contents is still loading.
             store.upsert_chapters(job.user_id, novel_id, page.chapters)
             count = page.chapters[-1].index
+            store.raise_chapter_count(novel_id, count)
         assert novel_id is not None  # toc_pages yields at least one page or raises
         store.finish_toc(novel_id, count)
         return {"novel_id": novel_id, "chapter_count": count}

@@ -1,6 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
-import { isPublicPath } from "@/lib/auth/paths";
+import { copyCookies } from "@/lib/auth/cookies";
+import { authDecision } from "@/lib/auth/paths";
 import { publicEnv } from "@/lib/env";
 
 export async function proxy(request: NextRequest) {
@@ -19,24 +20,31 @@ export async function proxy(request: NextRequest) {
     },
   });
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const { data } = await supabase.auth.getClaims();
+  const signedIn = typeof data?.claims?.sub === "string";
   const { pathname, search } = request.nextUrl;
 
-  if (!user && !isPublicPath(pathname)) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/login";
-    url.search = "";
-    url.searchParams.set("next", pathname + search);
-    return NextResponse.redirect(url);
-  }
-  if (user && isPublicPath(pathname)) {
-    return NextResponse.redirect(new URL("/", request.url));
+  switch (authDecision(pathname, signedIn)) {
+    case "unauthorized":
+      return copyCookies(
+        response,
+        NextResponse.json({ error: "Phiên đăng nhập đã hết. Tải lại trang để đăng nhập." }, { status: 401 }),
+      );
+    case "login": {
+      const url = request.nextUrl.clone();
+      url.pathname = "/login";
+      url.search = "";
+      url.searchParams.set("next", pathname + search);
+      return copyCookies(response, NextResponse.redirect(url));
+    }
+    case "home":
+      return copyCookies(response, NextResponse.redirect(new URL("/", request.url)));
+    case "next":
+      break;
   }
   return response;
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|ambient/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|mp3|webm)$).*)"],
+  matcher: ["/((?!_next/|favicon.ico|ambient/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|mp3|webm)$).*)"],
 };
