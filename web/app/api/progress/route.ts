@@ -3,6 +3,8 @@ import { progressBody } from "@/lib/progress/body";
 import { createClient, getUserId } from "@/lib/supabase/server";
 
 const NO_STORE = { "Cache-Control": "private, no-store" };
+const SAVE_FAILED = "Không lưu được tiến độ nghe. Thử lại sau ít phút.";
+const NOT_FOUND = "Không tìm thấy chương này.";
 
 function fail(status: number, error: string) {
   return NextResponse.json({ error }, { status, headers: NO_STORE });
@@ -39,6 +41,19 @@ export async function POST(request: NextRequest) {
 
   try {
     const supabase = await createClient();
+    // Foreign-key checks bypass RLS, so the pair is verified through the RLS-scoped client: an unknown or foreign
+    // chapter, or a chapter of another novel, must never become a progress row.
+    const found = await supabase
+      .from("chapters")
+      .select("id")
+      .eq("id", body.chapterId)
+      .eq("novel_id", body.novelId)
+      .maybeSingle();
+    if (found.error) {
+      console.error("progress route failed", found.error);
+      return fail(500, SAVE_FAILED);
+    }
+    if (!found.data) return fail(404, NOT_FOUND);
     const now = new Date().toISOString();
     const progress = supabase.from("progress").upsert(
       {
@@ -57,13 +72,16 @@ export async function POST(request: NextRequest) {
           .upsert({ user_id: userId, chapter_id: body.chapterId, finished_at: now }, { onConflict: "user_id,chapter_id" })
       : null;
     const [p, l] = await Promise.all([progress, listened]);
-    if (p.error || l?.error) {
-      console.error("progress route failed", p.error ?? l?.error);
-      return fail(500, "Không lưu được tiến độ nghe. Thử lại sau ít phút.");
+    const error = p.error ?? l?.error;
+    if (error) {
+      // 23503: the chapter was deleted between the read and the write.
+      if (error.code === "23503") return fail(404, NOT_FOUND);
+      console.error("progress route failed", error);
+      return fail(500, SAVE_FAILED);
     }
     return new NextResponse(null, { status: 204, headers: NO_STORE });
   } catch (err) {
     console.error("progress route failed", err);
-    return fail(500, "Không lưu được tiến độ nghe. Thử lại sau ít phút.");
+    return fail(500, SAVE_FAILED);
   }
 }
